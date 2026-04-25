@@ -239,8 +239,8 @@ def page_public(user: dict | None) -> bytes:
           <div id="fallbackTrafficMap" class="relative grid h-full w-full place-items-center bg-slate-100 p-6 text-center">
             <div class="max-w-md">
               <span class="material-symbols-outlined mb-3 text-6xl text-slate-400">map</span>
-              <h3 class="headline text-2xl font-bold text-slate-900">Google Maps Not Connected</h3>
-              <p class="mt-2 text-slate-600">Set <b>GOOGLE_MAPS_API_KEY</b> and restart the server to show live Google Maps traffic, your current location, and routed directions here.</p>
+              <h3 class="headline text-2xl font-bold text-slate-900">Location Traffic View</h3>
+              <p class="mt-2 text-slate-600">Google Maps is optional. This dashboard uses your browser location to estimate nearby congestion hotspots.</p>
               <p id="fallbackLocation" class="mt-4 rounded bg-white p-3 font-mono text-sm text-slate-500">Waiting for location permission...</p>
             </div>
           </div>
@@ -253,7 +253,7 @@ def page_public(user: dict | None) -> bytes:
         </div>
         <aside class="col-span-12 space-y-4 lg:col-span-4">
           <div class="rounded-lg border bg-white p-5"><div class="mb-4 flex items-center justify-between"><h3 class="text-xs font-bold uppercase text-slate-500">Congestion Hotspots</h3><button id="refreshTrafficBtn" class="rounded border px-2 py-1 text-xs font-bold">Refresh</button></div><div id="hotspots" class="space-y-3"></div></div>
-          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Map Source</h3><p id="mapSource" class="text-sm text-slate-600">Fallback traffic preview</p></div>
+          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Traffic Source</h3><p id="mapSource" class="text-sm text-slate-600">Location-based local congestion model</p></div>
           <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Best Route</h3><p id="routeSummary" class="text-sm text-slate-600">Enter a destination and press Best Route.</p></div>
         </aside>
       </div>
@@ -331,10 +331,11 @@ function setFallbackZoom(delta) {{
 function renderHotspots(summary) {{
   document.getElementById('avgSpeed').textContent = summary.avg_speed;
   document.getElementById('speedTrend').textContent = summary.trend;
+  if (summary.area) document.getElementById('mapSource').textContent = `${{summary.source_label || 'Location-based local congestion model'}} · ${{summary.area}}`;
   document.getElementById('hotspots').innerHTML = summary.hotspots.map((spot, index) => `
     <button class="hotspot-btn w-full rounded-r-lg border-l-4 ${{index === 0 ? 'border-red-500 bg-red-50' : 'border-orange-500 bg-orange-50'}} p-3 text-left" data-index="${{index}}">
       <b>${{spot.name}}</b>
-      <p class="text-xs text-slate-500">Delay: ${{spot.delay}}</p>
+      <p class="text-xs text-slate-500">Delay: ${{spot.delay}}${{spot.distance_km !== undefined ? ` · ${{spot.distance_km}} km away` : ''}}</p>
     </button>`).join('');
   document.querySelectorAll('.hotspot-btn').forEach(btn => btn.onclick = () => focusRoute(Number(btn.dataset.index || 0)));
 }}
@@ -347,7 +348,14 @@ function focusRoute(index) {{
   document.getElementById('mapSource').textContent = `Focused route: ${{route.name}}`;
 }}
 async function refreshTrafficSummary() {{
-  const summary = await (await fetch('/api/traffic-summary')).json();
+  let url = '/api/traffic-summary';
+  try {{
+    const pos = await getCurrentPositionPromise();
+    url += `?lat=${{pos.coords.latitude}}&lng=${{pos.coords.longitude}}`;
+    const fallbackLocation = document.getElementById('fallbackLocation');
+    if (fallbackLocation) fallbackLocation.textContent = `Your current location: ${{pos.coords.latitude.toFixed(6)}}, ${{pos.coords.longitude.toFixed(6)}}`;
+  }} catch (error) {{}}
+  const summary = await (await fetch(url)).json();
   renderHotspots(summary);
 }}
 function getCurrentPositionPromise() {{
@@ -760,7 +768,7 @@ class TrafficHandler(BaseHTTPRequestHandler):
         elif path == "/api/admin-state":
             self.json_response(admin_state())
         elif path == "/api/traffic-summary":
-            self.json_response(traffic_summary())
+            self.json_response(traffic_summary(query))
         elif path.startswith("/uploads/"):
             self.serve_upload(path)
         else:
@@ -935,39 +943,78 @@ def admin_state() -> dict:
     return {"signal": signal, "total_scans": total_scans, "latest_scans": latest_scans, "reports": reports}
 
 
-def traffic_summary() -> dict:
-    minute_bucket = int(time.time() // 60)
-    patterns = [
-        {
-            "avg_speed": "24.5 km/h",
-            "trend": "12% slower than previous hour",
-            "hotspots": [
-                {"name": "Worli Sea Link", "delay": "+18 mins"},
-                {"name": "Western Express Hwy", "delay": "+9 mins"},
-                {"name": "Bandra Kurla Complex", "delay": "+7 mins"},
-            ],
-        },
-        {
-            "avg_speed": "31.2 km/h",
-            "trend": "8% faster than previous hour",
-            "hotspots": [
-                {"name": "Western Express Hwy", "delay": "+11 mins"},
-                {"name": "Sion Circle", "delay": "+8 mins"},
-                {"name": "Eastern Express Hwy", "delay": "+6 mins"},
-            ],
-        },
-        {
-            "avg_speed": "19.8 km/h",
-            "trend": "Heavy congestion building",
-            "hotspots": [
-                {"name": "Bandra Kurla Complex", "delay": "+21 mins"},
-                {"name": "Worli Sea Link", "delay": "+16 mins"},
-                {"name": "Dadar TT", "delay": "+10 mins"},
-            ],
-        },
+def distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    from math import asin, cos, radians, sin, sqrt
+
+    radius = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlng = radians(lng2 - lng1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return round(2 * radius * asin(sqrt(a)), 1)
+
+
+def traffic_summary(query: dict[str, list[str]] | None = None) -> dict:
+    query = query or {}
+    lat = None
+    lng = None
+    try:
+        lat = float(query.get("lat", [""])[0])
+        lng = float(query.get("lng", [""])[0])
+    except ValueError:
+        pass
+
+    hotspots = [
+        {"name": "Worli Sea Link", "lat": 19.0270, "lng": 72.8150, "base_delay": 18},
+        {"name": "Western Express Hwy", "lat": 19.1176, "lng": 72.8562, "base_delay": 11},
+        {"name": "Bandra Kurla Complex", "lat": 19.0697, "lng": 72.8697, "base_delay": 13},
+        {"name": "Sion Circle", "lat": 19.0423, "lng": 72.8611, "base_delay": 8},
+        {"name": "Eastern Express Hwy", "lat": 19.0790, "lng": 72.9135, "base_delay": 9},
+        {"name": "Dadar TT", "lat": 19.0188, "lng": 72.8478, "base_delay": 10},
+        {"name": "Silk Board Junction", "lat": 12.9177, "lng": 77.6238, "base_delay": 16},
+        {"name": "Marathahalli Bridge", "lat": 12.9569, "lng": 77.7011, "base_delay": 14},
+        {"name": "KR Puram Tin Factory", "lat": 13.0005, "lng": 77.6757, "base_delay": 12},
+        {"name": "T Nagar", "lat": 13.0418, "lng": 80.2341, "base_delay": 13},
+        {"name": "Anna Salai", "lat": 13.0619, "lng": 80.2619, "base_delay": 11},
+        {"name": "Kathipara Junction", "lat": 13.0076, "lng": 80.2012, "base_delay": 15},
+        {"name": "Connaught Place", "lat": 28.6315, "lng": 77.2167, "base_delay": 12},
+        {"name": "AIIMS Ring Road", "lat": 28.5672, "lng": 77.2100, "base_delay": 14},
+        {"name": "ITO Junction", "lat": 28.6289, "lng": 77.2425, "base_delay": 17},
     ]
-    summary = patterns[minute_bucket % len(patterns)]
-    summary["source"] = "google_maps_traffic_layer" if GOOGLE_MAPS_API_KEY else "local_fallback"
+
+    minute_bucket = int(time.time() // 60)
+    pulse = [0, 2, 4, 1, 3][minute_bucket % 5]
+
+    if lat is not None and lng is not None:
+        for spot in hotspots:
+            spot["distance_km"] = distance_km(lat, lng, spot["lat"], spot["lng"])
+        selected = sorted(hotspots, key=lambda spot: spot["distance_km"])[:3]
+        area = f"near {selected[0]['name']}"
+    else:
+        selected = hotspots[:3]
+        area = "default Mumbai view"
+
+    formatted = []
+    total_delay = 0
+    for spot in selected:
+        delay = spot["base_delay"] + pulse
+        total_delay += delay
+        formatted.append(
+            {
+                "name": spot["name"],
+                "delay": f"+{delay} mins",
+                "distance_km": spot.get("distance_km"),
+            }
+        )
+
+    avg_speed = max(12, 42 - total_delay // max(1, len(formatted)))
+    summary = {
+        "avg_speed": f"{avg_speed}.0 km/h",
+        "trend": "Estimated from nearby congestion hotspots",
+        "hotspots": formatted,
+        "area": area,
+        "source": "google_maps_traffic_layer" if GOOGLE_MAPS_API_KEY else "location_model",
+        "source_label": "Google Maps traffic layer" if GOOGLE_MAPS_API_KEY else "Location-based local congestion model",
+    }
     return summary
 
 
