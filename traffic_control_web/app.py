@@ -23,7 +23,12 @@ PORT = int(os.environ.get("PORT", "5000"))
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
-ADMIN_EMAIL = "mohnishraj187@gmail.com"
+DEFAULT_ADMIN_EMAILS = "mohnishraj187@gmail.com,garvnijhawan24@gmail.com"
+ADMIN_EMAILS = {
+    email.strip().lower()
+    for email in os.environ.get("ADMIN_EMAILS", DEFAULT_ADMIN_EMAILS).split(",")
+    if email.strip()
+}
 APP_BASE_URL = os.environ.get("APP_BASE_URL", f"http://{HOST}:{PORT}")
 
 SESSIONS: dict[str, dict] = {}
@@ -148,6 +153,14 @@ def redirect_uri(handler: BaseHTTPRequestHandler) -> str:
     return f"{request_base_url(handler)}/auth/google/callback"
 
 
+def is_admin_email(email: str) -> bool:
+    return email.strip().lower() in ADMIN_EMAILS
+
+
+def admin_email_list() -> str:
+    return ", ".join(sorted(ADMIN_EMAILS))
+
+
 def page_login() -> bytes:
     body = """
 <header class="fixed top-0 z-40 flex h-16 w-full items-center justify-between border-b border-slate-200 bg-slate-50 px-6">
@@ -200,7 +213,7 @@ def page_access_denied(email: str) -> bytes:
     <span class="material-symbols-outlined mb-4 text-5xl text-red-600">block</span>
     <h1 class="headline mb-2 text-2xl font-bold">Admin Access Denied</h1>
     <p class="mb-4 text-slate-600">The account <b>{email or "unknown"}</b> is not allowed to enter the admin portal.</p>
-    <p class="rounded bg-slate-50 p-3 text-sm text-slate-500">Admin access is restricted to {ADMIN_EMAIL}.</p>
+    <p class="rounded bg-slate-50 p-3 text-sm text-slate-500">Admin access is restricted to {admin_email_list()}.</p>
     <a class="mt-6 inline-block rounded-lg bg-slate-950 px-4 py-3 font-bold text-white" href="/">Back to Login</a>
   </section>
 </main>"""
@@ -752,7 +765,7 @@ class TrafficHandler(BaseHTTPRequestHandler):
         elif path == "/admin-portal":
             self.redirect("/admin/dashboard")
         elif path == "/admin/dashboard":
-            if not user or user.get("email", "").lower() != ADMIN_EMAIL:
+            if not user or not is_admin_email(user.get("email", "")):
                 denied_email = urllib.parse.quote((user or {}).get("email", "not signed in"))
                 self.redirect(f"/access-denied?email={denied_email}")
                 return
@@ -836,7 +849,7 @@ class TrafficHandler(BaseHTTPRequestHandler):
             )
             self.redirect(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
             return
-        demo_email = ADMIN_EMAIL if role == "admin" else f"demo.{role}@traffic.local"
+        demo_email = sorted(ADMIN_EMAILS)[0] if role == "admin" else f"demo.{role}@traffic.local"
         demo_user = {"email": demo_email, "name": f"Demo {role.title()} User", "role": role, "picture": ""}
         self.redirect("/admin/dashboard" if role == "admin" else "/public", user=demo_user)
 
@@ -860,7 +873,7 @@ class TrafficHandler(BaseHTTPRequestHandler):
         with urllib.request.urlopen(user_req, timeout=15) as response:
             google_user = json.loads(response.read().decode())
         user = {"email": google_user.get("email", ""), "name": google_user.get("name", ""), "picture": google_user.get("picture", ""), "role": role}
-        if role == "admin" and user["email"].lower() != ADMIN_EMAIL:
+        if role == "admin" and not is_admin_email(user["email"]):
             denied_email = urllib.parse.quote(user["email"])
             self.redirect(f"/access-denied?email={denied_email}")
             return

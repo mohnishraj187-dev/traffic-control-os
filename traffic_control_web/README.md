@@ -41,6 +41,13 @@ Admin portal access is restricted to:
 
 ```text
 mohnishraj187@gmail.com
+garvnijhawan24@gmail.com
+```
+
+You can override this on Render with:
+
+```text
+ADMIN_EMAILS=mohnishraj187@gmail.com,garvnijhawan24@gmail.com
 ```
 
 Any other Google account that tries the admin login is redirected to an access denied page.
