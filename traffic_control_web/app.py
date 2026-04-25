@@ -25,7 +25,6 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 ADMIN_EMAIL = "mohnishraj187@gmail.com"
 APP_BASE_URL = os.environ.get("APP_BASE_URL", f"http://{HOST}:{PORT}")
-REDIRECT_URI = f"{APP_BASE_URL}/auth/google/callback"
 
 SESSIONS: dict[str, dict] = {}
 
@@ -135,6 +134,18 @@ def set_session(handler: BaseHTTPRequestHandler, user: dict) -> None:
     sid = secrets.token_urlsafe(32)
     SESSIONS[sid] = user
     handler.send_header("Set-Cookie", f"tc_session={sid}; HttpOnly; SameSite=Lax; Path=/")
+
+
+def request_base_url(handler: BaseHTTPRequestHandler) -> str:
+    forwarded_proto = handler.headers.get("X-Forwarded-Proto", "").split(",")[0].strip()
+    forwarded_host = handler.headers.get("X-Forwarded-Host", "").split(",")[0].strip()
+    proto = forwarded_proto or ("https" if handler.headers.get("X-Forwarded-Ssl", "").lower() == "on" else "http")
+    host = forwarded_host or handler.headers.get("Host", f"{HOST}:{PORT}")
+    return f"{proto}://{host}"
+
+
+def redirect_uri(handler: BaseHTTPRequestHandler) -> str:
+    return f"{request_base_url(handler)}/auth/google/callback"
 
 
 def page_login() -> bytes:
@@ -803,10 +814,11 @@ class TrafficHandler(BaseHTTPRequestHandler):
         role = query.get("role", ["public"])[0]
         if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
             state = secrets.token_urlsafe(16) + ":" + role
+            callback_url = redirect_uri(self)
             params = urllib.parse.urlencode(
                 {
                     "client_id": GOOGLE_CLIENT_ID,
-                    "redirect_uri": REDIRECT_URI,
+                    "redirect_uri": callback_url,
                     "response_type": "code",
                     "scope": "openid email profile",
                     "state": state,
@@ -829,7 +841,7 @@ class TrafficHandler(BaseHTTPRequestHandler):
                 "code": code,
                 "client_id": GOOGLE_CLIENT_ID,
                 "client_secret": GOOGLE_CLIENT_SECRET,
-                "redirect_uri": REDIRECT_URI,
+                "redirect_uri": redirect_uri(self),
                 "grant_type": "authorization_code",
             }
         ).encode()
