@@ -60,7 +60,7 @@ The public portal does not require a Google Maps API key. It uses:
 - OpenStreetMap tiles for the map view
 - Built-in local destination matching for common demo places
 - Nominatim as a fallback to find other typed India destinations, with query variants and local caching
-- Stable estimated route lines from the user's current location
+- Real road route lines from the user's current location using OSRM, with successful routes cached locally
 
 The route API is exposed at `/api/route` and accepts `origin_lat`, `origin_lng`, and `destination` query parameters.
 
@@ -69,7 +69,7 @@ The route API is exposed at `/api/route` and accepts `origin_lat`, `origin_lng`,
 - Public QR scan posts to `/api/qr-scan`; the admin dashboard shows the scan count.
 - Public "Start Scan" opens the camera using `getUserMedia`; automatic QR decoding works in browsers that support `BarcodeDetector`.
 - The public portal generates a scannable QR that opens `/qr-direct`; opening/scanning that URL sends a request straight to admin.
-- Public traffic buttons work: Show Route asks for a destination and draws a stable estimated route from the current location; Map Style toggles map layers, zoom controls change map zoom, locate centers on the current device location, and refresh reloads the traffic summary.
+- Public traffic buttons work: Show Route asks for a destination and draws a road route from the current location; Map Style toggles map layers, zoom controls change map zoom, locate centers on the current device location, and refresh reloads the traffic summary.
 - Public QR scans send the scanned code plus the scanner's current location to admin.
 - Public accident reports try to read GPS coordinates embedded in the uploaded photo, then fall back to the device location field; the admin dashboard shows that location in the Accident Section.
 - Admin QR and accident cards show where the request came from and include a Control button that selects that place before manual signal override.

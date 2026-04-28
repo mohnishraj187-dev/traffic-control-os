@@ -74,6 +74,12 @@ def init_db() -> None:
                 lng REAL NOT NULL,
                 created_at INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS route_cache (
+                route_key TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
             INSERT OR IGNORE INTO signal_state (id, signal, lane_diversion, priority_pass, updated_at)
             VALUES (1, 'stop', 1, 0, strftime('%s', 'now'));
             """
@@ -330,7 +336,7 @@ def page_public(user: dict | None) -> bytes:
         </div>
         <aside class="col-span-12 space-y-4 lg:col-span-4">
           <div class="rounded-lg border bg-white p-5"><div class="mb-4 flex items-center justify-between"><h3 class="text-xs font-bold uppercase text-slate-500">Congestion Hotspots</h3><button id="refreshTrafficBtn" class="rounded border px-2 py-1 text-xs font-bold">Refresh</button></div><div id="hotspots" class="space-y-3"></div></div>
-          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Map Source</h3><p id="mapSource" class="text-sm text-slate-600">OpenStreetMap with stable estimated routing</p></div>
+          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Map Source</h3><p id="mapSource" class="text-sm text-slate-600">OpenStreetMap with road routing</p></div>
           <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Route</h3><p id="routeSummary" class="text-sm text-slate-600">Enter a destination and press Show Route.</p></div>
         </aside>
       </div>
@@ -396,7 +402,7 @@ function initOpenMap() {{
   setTimeout(() => trafficMap.invalidateSize(), 150);
   setTimeout(() => trafficMap.invalidateSize(), 700);
   window.addEventListener('resize', () => trafficMap.invalidateSize());
-  document.getElementById('mapSource').textContent = 'OpenStreetMap with stable estimated routing';
+  document.getElementById('mapSource').textContent = 'OpenStreetMap with road routing';
 }}
 function renderHotspots(summary) {{
   document.getElementById('avgSpeed').textContent = summary.avg_speed;
@@ -473,6 +479,7 @@ async function optimizeBestRoute() {{
     const route = await res.json();
     if (!res.ok || !route.ok) {{
       summary.textContent = route.error || 'Route could not be calculated for that destination.';
+      document.getElementById('mapSource').textContent = 'Road route unavailable for this request';
       return;
     }}
     const coords = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
@@ -494,8 +501,8 @@ async function optimizeBestRoute() {{
       trafficMap.fitBounds(routeLine.getBounds(), {{ padding: [52, 52], maxZoom: 15 }});
     }}, 80);
     setTimeout(() => trafficMap.invalidateSize(), 500);
-    summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}}.`;
-    document.getElementById('mapSource').textContent = 'Stable estimated route drawn from your current location';
+    summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}} by road.`;
+    document.getElementById('mapSource').textContent = route.cached ? 'Road route from cache' : 'Road route from OSRM/OpenStreetMap';
   }} catch (error) {{
     summary.textContent = 'Allow location permission and check the destination spelling so the route can be calculated.';
   }}
@@ -1406,30 +1413,60 @@ def parse_destination(destination: str) -> dict | None:
     return nominatim_destination(cleaned)
 
 
-def estimated_route_response(origin_lat: float, origin_lng: float, destination: dict) -> dict:
-    distance_km_value = distance_km(origin_lat, origin_lng, destination["lat"], destination["lng"])
-    duration_min_value = max(3, round((distance_km_value / 28) * 60))
-    duration_text = f"{duration_min_value} mins" if duration_min_value < 90 else f"{round(duration_min_value / 60, 1)} hrs"
-    midpoint_lat = (origin_lat + destination["lat"]) / 2
-    midpoint_lng = (origin_lng + destination["lng"]) / 2
-    return {
+def route_cache_key(origin_lat: float, origin_lng: float, destination: dict) -> str:
+    return f"{origin_lat:.4f},{origin_lng:.4f}:{destination['lat']:.4f},{destination['lng']:.4f}"
+
+
+def cached_route(route_key: str) -> dict | None:
+    rows = db_rows("SELECT payload FROM route_cache WHERE route_key = ?", (route_key,))
+    if not rows:
+        return None
+    payload = json.loads(rows[0]["payload"])
+    payload["cached"] = True
+    return payload
+
+
+def cache_route(route_key: str, payload: dict) -> None:
+    db_execute(
+        "INSERT OR REPLACE INTO route_cache (route_key, payload, created_at) VALUES (?, ?, ?)",
+        (route_key, json.dumps(payload), int(time.time())),
+    )
+
+
+def osrm_route_response(origin_lat: float, origin_lng: float, destination: dict) -> dict:
+    route_key = route_cache_key(origin_lat, origin_lng, destination)
+    cached = cached_route(route_key)
+    if cached:
+        return cached
+
+    coords = f"{origin_lng},{origin_lat};{destination['lng']},{destination['lat']}"
+    params = urllib.parse.urlencode({"overview": "full", "geometries": "geojson", "steps": "false"})
+    route_data = fetch_json(f"https://router.project-osrm.org/route/v1/driving/{coords}?{params}")
+    routes = route_data.get("routes", []) if isinstance(route_data, dict) else []
+    if not routes:
+        return {"ok": False, "error": "No road route was found for that destination."}
+
+    route = routes[0]
+    geometry = route.get("geometry", {"type": "LineString", "coordinates": []})
+    if not geometry.get("coordinates"):
+        return {"ok": False, "error": "Road route geometry was empty."}
+
+    distance_km_value = route.get("distance", 0) / 1000
+    duration_min_value = route.get("duration", 0) / 60
+    duration_text = f"{round(duration_min_value)} mins" if duration_min_value < 90 else f"{round(duration_min_value / 60, 1)} hrs"
+    payload = {
         "ok": True,
-        "estimated": True,
+        "cached": False,
         "destination": destination,
-        "distance_km": distance_km_value,
-        "distance_text": f"{distance_km_value} km",
-        "duration_min": duration_min_value,
+        "distance_km": round(distance_km_value, 1),
+        "distance_text": f"{round(distance_km_value, 1)} km",
+        "duration_min": round(duration_min_value),
         "duration_text": duration_text,
-        "geometry": {
-            "type": "LineString",
-            "coordinates": [
-                [origin_lng, origin_lat],
-                [midpoint_lng, midpoint_lat],
-                [destination["lng"], destination["lat"]],
-            ],
-        },
-        "source": "local_estimated_route",
+        "geometry": geometry,
+        "source": "osrm_road_route",
     }
+    cache_route(route_key, payload)
+    return payload
 
 
 def route_summary(query: dict[str, list[str]]) -> dict:
@@ -1448,11 +1485,17 @@ def route_summary(query: dict[str, list[str]]) -> dict:
         if not destination:
             return {"ok": False, "error": "Destination was not found."}
 
-        return estimated_route_response(origin_lat, origin_lng, destination)
+        route_key = route_cache_key(origin_lat, origin_lng, destination)
+        cached = cached_route(route_key)
+        if cached:
+            return cached
+        return osrm_route_response(origin_lat, origin_lng, destination)
     except Exception as exc:
         if "destination" in locals():
-            return estimated_route_response(origin_lat, origin_lng, destination)
-        return {"ok": False, "error": f"Route service is unavailable: {exc}"}
+            cached = cached_route(route_cache_key(origin_lat, origin_lng, destination))
+            if cached:
+                return cached
+        return {"ok": False, "error": "Road routing is temporarily unavailable. Try again in a minute."}
 
 
 def distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
