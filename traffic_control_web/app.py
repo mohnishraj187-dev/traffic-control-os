@@ -231,7 +231,13 @@ def page_public(user: dict | None) -> bytes:
   <style>
     #osmTrafficMap { min-height: 500px; height: 100%; width: 100%; }
     .leaflet-container { height: 100%; width: 100%; font-family: Inter, system-ui, sans-serif; }
-    .leaflet-tile-container img { max-width: none !important; max-height: none !important; }
+    .leaflet-pane,
+    .leaflet-map-pane,
+    .leaflet-layer,
+    .leaflet-tile-pane,
+    .leaflet-overlay-pane,
+    .leaflet-marker-pane { position: absolute; inset: 0; }
+    .leaflet-tile { width: 256px !important; height: 256px !important; max-width: none !important; max-height: none !important; }
   </style>"""
     body = f"""
 <aside class="fixed left-0 top-0 z-50 hidden h-full w-64 flex-col border-r border-slate-200 bg-white py-6 lg:flex">
@@ -269,7 +275,7 @@ def page_public(user: dict | None) -> bytes:
         </div>
         <aside class="col-span-12 space-y-4 lg:col-span-4">
           <div class="rounded-lg border bg-white p-5"><div class="mb-4 flex items-center justify-between"><h3 class="text-xs font-bold uppercase text-slate-500">Congestion Hotspots</h3><button id="refreshTrafficBtn" class="rounded border px-2 py-1 text-xs font-bold">Refresh</button></div><div id="hotspots" class="space-y-3"></div></div>
-          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Map Source</h3><p id="mapSource" class="text-sm text-slate-600">OpenStreetMap tiles with OSRM routing</p></div>
+          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Map Source</h3><p id="mapSource" class="text-sm text-slate-600">OpenStreetMap with stable estimated routing</p></div>
           <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Route</h3><p id="routeSummary" class="text-sm text-slate-600">Enter a destination and press Show Route.</p></div>
         </aside>
       </div>
@@ -332,7 +338,7 @@ function initOpenMap() {{
   L.control.zoom({{ position: 'bottomright' }}).addTo(trafficMap);
   setTimeout(() => trafficMap.invalidateSize(), 150);
   window.addEventListener('resize', () => trafficMap.invalidateSize());
-  document.getElementById('mapSource').textContent = 'OpenStreetMap tiles with OSRM routing';
+  document.getElementById('mapSource').textContent = 'OpenStreetMap with stable estimated routing';
 }}
 function renderHotspots(summary) {{
   document.getElementById('avgSpeed').textContent = summary.avg_speed;
@@ -418,9 +424,8 @@ async function optimizeBestRoute() {{
     destinationMarker = L.marker([route.destination.lat, route.destination.lng]).addTo(trafficMap).bindPopup(route.destination.name || destination);
     trafficMap.invalidateSize();
     trafficMap.fitBounds(routeLine.getBounds(), {{ padding: [36, 36] }});
-    const routeType = route.estimated ? 'estimated route' : 'road route';
-    summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}} (${{routeType}}).`;
-    document.getElementById('mapSource').textContent = route.estimated ? 'Estimated route shown because the free road-routing service is busy' : 'Route from OpenStreetMap geocoding and OSRM driving directions';
+    summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}}.`;
+    document.getElementById('mapSource').textContent = 'Stable estimated route drawn from your current location';
   }} catch (error) {{
     summary.textContent = 'Allow location permission and check the destination spelling so the route can be calculated.';
   }}
@@ -960,6 +965,35 @@ def fetch_json(url: str) -> dict | list:
         return json.loads(response.read().decode("utf-8"))
 
 
+LOCAL_DESTINATIONS = [
+    ("vandalur zoo", "Arignar Anna Zoological Park, Vandalur", 12.8793, 80.0817),
+    ("arignar anna zoological park", "Arignar Anna Zoological Park, Vandalur", 12.8793, 80.0817),
+    ("mambakkam", "Mambakkam, Chennai", 12.8406, 80.1534),
+    ("tambaram", "Tambaram, Chennai", 12.9249, 80.1000),
+    ("kelambakkam", "Kelambakkam, Chennai", 12.7867, 80.2206),
+    ("medavakkam", "Medavakkam, Chennai", 12.9171, 80.1923),
+    ("sholinganallur", "Sholinganallur, Chennai", 12.9010, 80.2279),
+    ("velachery", "Velachery, Chennai", 12.9756, 80.2207),
+    ("t nagar", "T Nagar, Chennai", 13.0418, 80.2341),
+    ("anna salai", "Anna Salai, Chennai", 13.0619, 80.2619),
+    ("sowcarpet", "Sowcarpet, Chennai", 13.0940, 80.2791),
+    ("kathipara", "Kathipara Junction, Chennai", 13.0076, 80.2012),
+    ("silk board", "Silk Board Junction, Bengaluru", 12.9177, 77.6238),
+    ("marathahalli", "Marathahalli Bridge, Bengaluru", 12.9569, 77.7011),
+    ("kr puram", "KR Puram Tin Factory, Bengaluru", 13.0005, 77.6757),
+    ("worli sea link", "Worli Sea Link, Mumbai", 19.0270, 72.8150),
+    ("bandra kurla", "Bandra Kurla Complex, Mumbai", 19.0697, 72.8697),
+]
+
+
+def local_destination_match(destination: str) -> dict | None:
+    cleaned = destination.strip().lower()
+    for key, name, lat, lng in LOCAL_DESTINATIONS:
+        if key in cleaned or cleaned in key:
+            return {"lat": lat, "lng": lng, "name": name}
+    return None
+
+
 def parse_destination(destination: str) -> dict | None:
     cleaned = destination.strip()
     parts = [part.strip() for part in cleaned.split(",")]
@@ -972,16 +1006,23 @@ def parse_destination(destination: str) -> dict | None:
         except ValueError:
             pass
 
-    params = urllib.parse.urlencode({"format": "jsonv2", "limit": 1, "q": cleaned})
-    results = fetch_json(f"https://nominatim.openstreetmap.org/search?{params}")
-    if not isinstance(results, list) or not results:
+    local = local_destination_match(cleaned)
+    if local:
+        return local
+
+    try:
+        params = urllib.parse.urlencode({"format": "jsonv2", "limit": 1, "q": cleaned})
+        results = fetch_json(f"https://nominatim.openstreetmap.org/search?{params}")
+        if not isinstance(results, list) or not results:
+            return None
+        match = results[0]
+        return {
+            "lat": float(match["lat"]),
+            "lng": float(match["lon"]),
+            "name": match.get("display_name", cleaned),
+        }
+    except Exception:
         return None
-    match = results[0]
-    return {
-        "lat": float(match["lat"]),
-        "lng": float(match["lon"]),
-        "name": match.get("display_name", cleaned),
-    }
 
 
 def estimated_route_response(origin_lat: float, origin_lng: float, destination: dict) -> dict:
@@ -1026,27 +1067,7 @@ def route_summary(query: dict[str, list[str]]) -> dict:
         if not destination:
             return {"ok": False, "error": "Destination was not found."}
 
-        coords = f"{origin_lng},{origin_lat};{destination['lng']},{destination['lat']}"
-        params = urllib.parse.urlencode({"overview": "full", "geometries": "geojson", "steps": "false"})
-        route_data = fetch_json(f"https://router.project-osrm.org/route/v1/driving/{coords}?{params}")
-        routes = route_data.get("routes", []) if isinstance(route_data, dict) else []
-        if not routes:
-            return estimated_route_response(origin_lat, origin_lng, destination)
-
-        route = routes[0]
-        distance_km_value = route.get("distance", 0) / 1000
-        duration_min_value = route.get("duration", 0) / 60
-        duration_text = f"{round(duration_min_value)} mins" if duration_min_value < 90 else f"{round(duration_min_value / 60, 1)} hrs"
-        return {
-            "ok": True,
-            "destination": destination,
-            "distance_km": round(distance_km_value, 1),
-            "distance_text": f"{round(distance_km_value, 1)} km",
-            "duration_min": round(duration_min_value),
-            "duration_text": duration_text,
-            "geometry": route.get("geometry", {"type": "LineString", "coordinates": []}),
-            "source": "openstreetmap_nominatim_osrm",
-        }
+        return estimated_route_response(origin_lat, origin_lng, destination)
     except Exception as exc:
         if "destination" in locals():
             return estimated_route_response(origin_lat, origin_lng, destination)
