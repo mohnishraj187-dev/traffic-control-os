@@ -1313,6 +1313,66 @@ LOCAL_DESTINATIONS = [
     ("kr puram", "KR Puram Tin Factory, Bengaluru", 13.0005, 77.6757),
     ("worli sea link", "Worli Sea Link, Mumbai", 19.0270, 72.8150),
     ("bandra kurla", "Bandra Kurla Complex, Mumbai", 19.0697, 72.8697),
+    ("mumbai", "Mumbai, Maharashtra", 19.0760, 72.8777),
+    ("delhi", "Delhi", 28.6139, 77.2090),
+    ("new delhi", "New Delhi", 28.6139, 77.2090),
+    ("kolkata", "Kolkata, West Bengal", 22.5726, 88.3639),
+    ("hyderabad", "Hyderabad, Telangana", 17.3850, 78.4867),
+    ("pune", "Pune, Maharashtra", 18.5204, 73.8567),
+    ("ahmedabad", "Ahmedabad, Gujarat", 23.0225, 72.5714),
+    ("jaipur", "Jaipur, Rajasthan", 26.9124, 75.7873),
+    ("lucknow", "Lucknow, Uttar Pradesh", 26.8467, 80.9462),
+    ("kanpur", "Kanpur, Uttar Pradesh", 26.4499, 80.3319),
+    ("nagpur", "Nagpur, Maharashtra", 21.1458, 79.0882),
+    ("indore", "Indore, Madhya Pradesh", 22.7196, 75.8577),
+    ("thane", "Thane, Maharashtra", 19.2183, 72.9781),
+    ("bhopal", "Bhopal, Madhya Pradesh", 23.2599, 77.4126),
+    ("visakhapatnam", "Visakhapatnam, Andhra Pradesh", 17.6868, 83.2185),
+    ("patna", "Patna, Bihar", 25.5941, 85.1376),
+    ("vadodara", "Vadodara, Gujarat", 22.3072, 73.1812),
+    ("ghaziabad", "Ghaziabad, Uttar Pradesh", 28.6692, 77.4538),
+    ("ludhiana", "Ludhiana, Punjab", 30.9010, 75.8573),
+    ("agra", "Agra, Uttar Pradesh", 27.1767, 78.0081),
+    ("nashik", "Nashik, Maharashtra", 19.9975, 73.7898),
+    ("faridabad", "Faridabad, Haryana", 28.4089, 77.3178),
+    ("meerut", "Meerut, Uttar Pradesh", 28.9845, 77.7064),
+    ("rajkot", "Rajkot, Gujarat", 22.3039, 70.8022),
+    ("varanasi", "Varanasi, Uttar Pradesh", 25.3176, 82.9739),
+    ("srinagar", "Srinagar, Jammu and Kashmir", 34.0837, 74.7973),
+    ("aurangabad", "Aurangabad, Maharashtra", 19.8762, 75.3433),
+    ("dhanbad", "Dhanbad, Jharkhand", 23.7957, 86.4304),
+    ("amritsar", "Amritsar, Punjab", 31.6340, 74.8723),
+    ("prayagraj", "Prayagraj, Uttar Pradesh", 25.4358, 81.8463),
+    ("allahabad", "Prayagraj, Uttar Pradesh", 25.4358, 81.8463),
+    ("ranchi", "Ranchi, Jharkhand", 23.3441, 85.3096),
+    ("howrah", "Howrah, West Bengal", 22.5958, 88.2636),
+    ("coimbatore", "Coimbatore, Tamil Nadu", 11.0168, 76.9558),
+    ("jabalpur", "Jabalpur, Madhya Pradesh", 23.1815, 79.9864),
+    ("gwalior", "Gwalior, Madhya Pradesh", 26.2183, 78.1828),
+    ("vijayawada", "Vijayawada, Andhra Pradesh", 16.5062, 80.6480),
+    ("jodhpur", "Jodhpur, Rajasthan", 26.2389, 73.0243),
+    ("madurai", "Madurai, Tamil Nadu", 9.9252, 78.1198),
+    ("raipur", "Raipur, Chhattisgarh", 21.2514, 81.6296),
+    ("kota", "Kota, Rajasthan", 25.2138, 75.8648),
+    ("guwahati", "Guwahati, Assam", 26.1445, 91.7362),
+    ("chandigarh", "Chandigarh", 30.7333, 76.7794),
+    ("solapur", "Solapur, Maharashtra", 17.6599, 75.9064),
+    ("hubli", "Hubballi, Karnataka", 15.3647, 75.1240),
+    ("hubballi", "Hubballi, Karnataka", 15.3647, 75.1240),
+    ("mysuru", "Mysuru, Karnataka", 12.2958, 76.6394),
+    ("mysore", "Mysuru, Karnataka", 12.2958, 76.6394),
+    ("tiruchirappalli", "Tiruchirappalli, Tamil Nadu", 10.7905, 78.7047),
+    ("trichy", "Tiruchirappalli, Tamil Nadu", 10.7905, 78.7047),
+    ("salem", "Salem, Tamil Nadu", 11.6643, 78.1460),
+    ("tirunelveli", "Tirunelveli, Tamil Nadu", 8.7139, 77.7567),
+    ("erode", "Erode, Tamil Nadu", 11.3410, 77.7172),
+    ("vellore", "Vellore, Tamil Nadu", 12.9165, 79.1325),
+    ("thoothukudi", "Thoothukudi, Tamil Nadu", 8.7642, 78.1348),
+    ("tuticorin", "Thoothukudi, Tamil Nadu", 8.7642, 78.1348),
+    ("dindigul", "Dindigul, Tamil Nadu", 10.3673, 77.9803),
+    ("thanjavur", "Thanjavur, Tamil Nadu", 10.7870, 79.1378),
+    ("pondicherry", "Puducherry", 11.9416, 79.8083),
+    ("puducherry", "Puducherry", 11.9416, 79.8083),
 ]
 
 
@@ -1390,6 +1450,42 @@ def nominatim_destination(destination: str) -> dict | None:
     return None
 
 
+def photon_destination(destination: str) -> dict | None:
+    for query in geocode_query_variants(destination):
+        params = urllib.parse.urlencode(
+            {
+                "q": query,
+                "limit": 1,
+                "lang": "en",
+                "bbox": "68.0,6.0,98.0,37.5",
+            }
+        )
+        try:
+            results = fetch_json(f"https://photon.komoot.io/api/?{params}")
+        except Exception:
+            continue
+        features = results.get("features", []) if isinstance(results, dict) else []
+        if not features:
+            continue
+        feature = features[0]
+        props = feature.get("properties", {})
+        country = str(props.get("country", "")).lower()
+        if country and country != "india":
+            continue
+        coords = feature.get("geometry", {}).get("coordinates", [])
+        if len(coords) < 2:
+            continue
+        name_parts = [props.get("name"), props.get("city"), props.get("state"), props.get("country")]
+        found = {
+            "lat": float(coords[1]),
+            "lng": float(coords[0]),
+            "name": ", ".join(str(part) for part in name_parts if part),
+        }
+        cache_destination(destination, found)
+        return found
+    return None
+
+
 def parse_destination(destination: str) -> dict | None:
     cleaned = destination.strip()
     parts = [part.strip() for part in cleaned.split(",")]
@@ -1410,7 +1506,7 @@ def parse_destination(destination: str) -> dict | None:
     if cached:
         return cached
 
-    return nominatim_destination(cleaned)
+    return nominatim_destination(cleaned) or photon_destination(cleaned)
 
 
 def route_cache_key(origin_lat: float, origin_lng: float, destination: dict) -> str:
@@ -1495,7 +1591,8 @@ def route_summary(query: dict[str, list[str]]) -> dict:
             cached = cached_route(route_cache_key(origin_lat, origin_lng, destination))
             if cached:
                 return cached
-        return {"ok": False, "error": "Road routing is temporarily unavailable. Try again in a minute."}
+            return {"ok": False, "destination": destination, "error": f"Destination found as {destination['name']}, but road routing is temporarily unavailable. Try again in a minute."}
+        return {"ok": False, "error": "Destination search is temporarily unavailable. Try a more specific place name with city/state."}
 
 
 def distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

@@ -60,6 +60,7 @@ The public portal does not require a Google Maps API key. It uses:
 - OpenStreetMap tiles for the map view
 - Built-in local destination matching for common demo places
 - Nominatim as a fallback to find other typed India destinations, with query variants and local caching
+- Photon as a second no-key geocoder fallback for broader India place search
 - Real road route lines from the user's current location using OSRM, with successful routes cached locally
 
 The route API is exposed at `/api/route` and accepts `origin_lat`, `origin_lng`, and `destination` query parameters.
