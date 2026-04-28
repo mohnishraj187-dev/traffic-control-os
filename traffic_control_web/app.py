@@ -22,7 +22,6 @@ PORT = int(os.environ.get("PORT", "5000"))
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 DEFAULT_ADMIN_EMAILS = "mohnishraj187@gmail.com,garvnijhawan24@gmail.com"
 ADMIN_EMAILS = {
     email.strip().lower()
@@ -157,6 +156,10 @@ def is_admin_email(email: str) -> bool:
     return email.strip().lower() in ADMIN_EMAILS
 
 
+def is_admin_user(user: dict | None) -> bool:
+    return bool(user and is_admin_email(user.get("email", "")))
+
+
 def admin_email_list() -> str:
     return ", ".join(sorted(ADMIN_EMAILS))
 
@@ -222,9 +225,12 @@ def page_access_denied(email: str) -> bytes:
 
 def page_public(user: dict | None) -> bytes:
     email = (user or {}).get("email", "demo.public@traffic.local")
-    maps_loader = ""
-    if GOOGLE_MAPS_API_KEY:
-        maps_loader = f'<script async defer src="https://maps.googleapis.com/maps/api/js?key={GOOGLE_MAPS_API_KEY}&loading=async&callback=initGoogleTrafficMap"></script>'
+    extra_head = """
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQHLyrcf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    .leaflet-container { height: 100%; width: 100%; font-family: Inter, system-ui, sans-serif; }
+  </style>"""
     body = f"""
 <aside class="fixed left-0 top-0 z-50 hidden h-full w-64 flex-col border-r border-slate-200 bg-white py-6 lg:flex">
   <div class="mb-8 px-6"><span class="text-lg font-bold uppercase tracking-tight">I-TRAFFIC PUBLIC</span></div>
@@ -243,19 +249,14 @@ def page_public(user: dict | None) -> bytes:
   <div class="hide-scrollbar flex snap-x snap-mandatory overflow-x-auto">
     <section id="live" class="w-full flex-none snap-start space-y-6 p-6">
       <div class="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-        <div><span class="rounded bg-red-100 px-2 py-0.5 text-xs font-bold uppercase text-red-600">Live</span><h2 class="headline mt-2 text-2xl font-semibold">Mumbai Metro Traffic</h2><p class="text-slate-600">Real-time congestion analytics for Greater Mumbai.</p></div>
-        <div class="flex flex-wrap gap-2"><input id="destinationInput" class="min-w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" placeholder="Enter destination for best route"><button id="optimizeRoutesBtn" class="rounded-lg bg-slate-950 px-4 py-2 font-medium text-white">Best Route</button><button id="layersBtn" class="rounded-lg border bg-white px-4 py-2 font-medium">Layers</button></div>
+        <div><span class="rounded bg-red-100 px-2 py-0.5 text-xs font-bold uppercase text-red-600">Live</span><h2 class="headline mt-2 text-2xl font-semibold">Local Traffic Map</h2><p class="text-slate-600">Location-based map and destination routing without paid Google Maps APIs.</p></div>
+        <div class="flex flex-wrap gap-2"><input id="destinationInput" class="min-w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" placeholder="Enter destination for route"><button id="optimizeRoutesBtn" class="rounded-lg bg-slate-950 px-4 py-2 font-medium text-white">Show Route</button><button id="layersBtn" class="rounded-lg border bg-white px-4 py-2 font-medium">Map Style</button></div>
       </div>
       <div class="grid grid-cols-12 gap-6">
         <div class="relative col-span-12 h-[500px] overflow-hidden rounded-lg border border-slate-200 bg-white lg:col-span-8">
-          <div id="googleTrafficMap" class="hidden h-full w-full"></div>
-          <div id="fallbackTrafficMap" class="relative grid h-full w-full place-items-center bg-slate-100 p-6 text-center">
-            <div class="max-w-md">
-              <span class="material-symbols-outlined mb-3 text-6xl text-slate-400">map</span>
-              <h3 class="headline text-2xl font-bold text-slate-900">Location Traffic View</h3>
-              <p class="mt-2 text-slate-600">Google Maps is optional. This dashboard uses your browser location to estimate nearby congestion hotspots.</p>
-              <p id="fallbackLocation" class="mt-4 rounded bg-white p-3 font-mono text-sm text-slate-500">Waiting for location permission...</p>
-            </div>
+          <div id="osmTrafficMap" class="h-full w-full"></div>
+          <div id="fallbackTrafficMap" class="pointer-events-none absolute inset-x-4 bottom-4 z-[450] rounded-lg border bg-white/95 p-3 text-sm shadow-sm backdrop-blur">
+            <p id="fallbackLocation" class="font-mono text-slate-600">Waiting for location permission...</p>
           </div>
           <div class="absolute left-4 top-4 rounded-lg border bg-white/90 p-3 shadow-sm backdrop-blur"><p class="text-xs font-bold uppercase text-slate-500">Avg. Speed</p><p id="avgSpeed" class="font-mono text-lg font-bold">24.5 km/h</p><p id="speedTrend" class="text-xs text-red-500">12% from yesterday</p></div>
           <div class="absolute bottom-4 right-4 flex flex-col gap-2">
@@ -266,8 +267,8 @@ def page_public(user: dict | None) -> bytes:
         </div>
         <aside class="col-span-12 space-y-4 lg:col-span-4">
           <div class="rounded-lg border bg-white p-5"><div class="mb-4 flex items-center justify-between"><h3 class="text-xs font-bold uppercase text-slate-500">Congestion Hotspots</h3><button id="refreshTrafficBtn" class="rounded border px-2 py-1 text-xs font-bold">Refresh</button></div><div id="hotspots" class="space-y-3"></div></div>
-          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Traffic Source</h3><p id="mapSource" class="text-sm text-slate-600">Location-based local congestion model</p></div>
-          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Best Route</h3><p id="routeSummary" class="text-sm text-slate-600">Enter a destination and press Best Route.</p></div>
+          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Map Source</h3><p id="mapSource" class="text-sm text-slate-600">OpenStreetMap tiles with OSRM routing</p></div>
+          <div class="rounded-lg border bg-white p-5"><h3 class="mb-2 text-xs font-bold uppercase text-slate-500">Route</h3><p id="routeSummary" class="text-sm text-slate-600">Enter a destination and press Show Route.</p></div>
         </aside>
       </div>
     </section>
@@ -304,42 +305,30 @@ def page_public(user: dict | None) -> bytes:
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <script>
 let trafficMap;
-let trafficLayer;
-let transitLayer;
-let directionsService;
-let directionsRenderer;
+let streetLayer;
+let topoLayer;
+let routeLine;
 let currentLocationMarker;
-let trafficLayersVisible = true;
-let fallbackZoom = 12;
+let destinationMarker;
+let usingTopoLayer = false;
 let routeIndex = 0;
 const routeFocus = [
   {{ name: 'Worli Sea Link', center: {{ lat: 19.0270, lng: 72.8150 }}, zoom: 14 }},
   {{ name: 'Western Express Hwy', center: {{ lat: 19.1176, lng: 72.8562 }}, zoom: 13 }},
   {{ name: 'Bandra Kurla Complex', center: {{ lat: 19.0697, lng: 72.8697 }}, zoom: 14 }}
 ];
-window.initGoogleTrafficMap = function () {{
-  const mapEl = document.getElementById('googleTrafficMap');
-  const fallbackEl = document.getElementById('fallbackTrafficMap');
-  mapEl.classList.remove('hidden');
-  fallbackEl.classList.add('hidden');
-  trafficMap = new google.maps.Map(mapEl, {{
-    center: {{ lat: 19.0760, lng: 72.8777 }},
-    zoom: 12,
-    mapTypeControl: false,
-    streetViewControl: false,
-    fullscreenControl: true
+function initOpenMap() {{
+  trafficMap = L.map('osmTrafficMap', {{ zoomControl: false }}).setView([19.0760, 72.8777], 12);
+  streetLayer = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }}).addTo(trafficMap);
+  topoLayer = L.tileLayer('https://{{s}}.tile.opentopomap.org/{{z}}/{{x}}/{{y}}.png', {{
+    maxZoom: 17,
+    attribution: '&copy; OpenStreetMap contributors, SRTM | OpenTopoMap'
   }});
-  trafficLayer = new google.maps.TrafficLayer();
-  transitLayer = new google.maps.TransitLayer();
-  directionsService = new google.maps.DirectionsService();
-  directionsRenderer = new google.maps.DirectionsRenderer({{ map: trafficMap, suppressMarkers: false }});
-  trafficLayer.setMap(trafficMap);
-  document.getElementById('mapSource').textContent = 'Google Maps live TrafficLayer';
-  centerOnCurrentLocation(true).catch(() => {{}});
-}};
-function setFallbackZoom(delta) {{
-  fallbackZoom = Math.max(10, Math.min(16, fallbackZoom + delta));
-  document.getElementById('fallbackTrafficMap').style.transform = `scale(${{1 + (fallbackZoom - 12) * 0.05}})`;
+  L.control.zoom({{ position: 'bottomright' }}).addTo(trafficMap);
+  document.getElementById('mapSource').textContent = 'OpenStreetMap tiles with OSRM routing';
 }}
 function renderHotspots(summary) {{
   document.getElementById('avgSpeed').textContent = summary.avg_speed;
@@ -355,9 +344,7 @@ function renderHotspots(summary) {{
 function focusRoute(index) {{
   const route = routeFocus[index % routeFocus.length];
   routeIndex = index;
-  if (trafficMap) trafficMap.setCenter(route.center), trafficMap.setZoom(route.zoom);
-  const routeLine = document.getElementById('routeLine');
-  if (routeLine) routeLine.style.transform = `rotate(${{index % 2 ? 8 : -6}}deg)`;
+  if (trafficMap) trafficMap.setView([route.center.lat, route.center.lng], route.zoom);
   document.getElementById('mapSource').textContent = `Focused route: ${{route.name}}`;
 }}
 async function refreshTrafficSummary() {{
@@ -384,23 +371,17 @@ async function centerOnCurrentLocation(fromAutoLoad = false) {{
     const fallbackLocation = document.getElementById('fallbackLocation');
     if (fallbackLocation) fallbackLocation.textContent = `Your current location: ${{center.lat.toFixed(6)}}, ${{center.lng.toFixed(6)}}`;
     if (trafficMap) {{
-      trafficMap.setCenter(center);
-      trafficMap.setZoom(15);
+      trafficMap.setView([center.lat, center.lng], 15);
       if (!currentLocationMarker) {{
-        currentLocationMarker = new google.maps.Marker({{
-          position: center,
-          map: trafficMap,
-          title: 'Your current location',
-          label: 'You'
-        }});
+        currentLocationMarker = L.marker([center.lat, center.lng]).addTo(trafficMap).bindPopup('Your current location');
       }} else {{
-        currentLocationMarker.setPosition(center);
+        currentLocationMarker.setLatLng([center.lat, center.lng]);
       }}
     }}
-    document.getElementById('mapSource').textContent = `Google Maps traffic centered on your location: ${{center.lat.toFixed(4)}}, ${{center.lng.toFixed(4)}}`;
+    document.getElementById('mapSource').textContent = `OpenStreetMap centered on your location: ${{center.lat.toFixed(4)}}, ${{center.lng.toFixed(4)}}`;
     return center;
   }} catch (error) {{
-    const msg = fromAutoLoad ? 'Allow location permission to show your position on Google Maps.' : 'Location permission not granted.';
+    const msg = fromAutoLoad ? 'Allow location permission to show your position on the map.' : 'Location permission not granted.';
     document.getElementById('mapSource').textContent = msg;
     const fallbackLocation = document.getElementById('fallbackLocation');
     if (fallbackLocation) fallbackLocation.textContent = msg;
@@ -418,48 +399,42 @@ async function optimizeBestRoute() {{
   summary.textContent = 'Finding your best route...';
   try {{
     const origin = await centerOnCurrentLocation(false);
-    if (trafficMap && directionsService && directionsRenderer) {{
-      directionsService.route({{
-        origin,
-        destination,
-        travelMode: google.maps.TravelMode.DRIVING,
-        drivingOptions: {{ departureTime: new Date(), trafficModel: google.maps.TrafficModel.BEST_GUESS }},
-        provideRouteAlternatives: true
-      }}, (result, status) => {{
-        if (status !== 'OK' || !result.routes.length) {{
-          summary.textContent = 'Google Maps could not find a route for that destination.';
-          return;
-        }}
-        result.routes.sort((a, b) => {{
-          const aLeg = a.legs[0], bLeg = b.legs[0];
-          return (aLeg.duration_in_traffic?.value || aLeg.duration.value) - (bLeg.duration_in_traffic?.value || bLeg.duration.value);
-        }});
-        result.routes = [result.routes[0], ...result.routes.slice(1)];
-        directionsRenderer.setDirections(result);
-        const leg = result.routes[0].legs[0];
-        summary.textContent = `${{leg.start_address}} to ${{leg.end_address}}: ${{leg.duration_in_traffic?.text || leg.duration.text}}, ${{leg.distance.text}}`;
-      }});
+    const params = new URLSearchParams({{ origin_lat: origin.lat, origin_lng: origin.lng, destination }});
+    const res = await fetch(`/api/route?${{params.toString()}}`);
+    const route = await res.json();
+    if (!res.ok || !route.ok) {{
+      summary.textContent = route.error || 'Route could not be calculated for that destination.';
       return;
     }}
-    const url = `https://www.google.com/maps/dir/?api=1&origin=${{origin.lat}},${{origin.lng}}&destination=${{encodeURIComponent(destination)}}&travelmode=driving`;
-    summary.innerHTML = `Google Maps key is not set. <a class="font-bold underline" target="_blank" href="${{url}}">Open route in Google Maps</a>.`;
-    focusRoute((routeIndex + 1) % routeFocus.length);
+    const coords = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+    if (routeLine) routeLine.remove();
+    if (destinationMarker) destinationMarker.remove();
+    routeLine = L.polyline(coords, {{ color: '#fd761a', weight: 6, opacity: 0.9 }}).addTo(trafficMap);
+    destinationMarker = L.marker([route.destination.lat, route.destination.lng]).addTo(trafficMap).bindPopup(route.destination.name || destination);
+    trafficMap.fitBounds(routeLine.getBounds(), {{ padding: [36, 36] }});
+    summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}} by road.`;
+    document.getElementById('mapSource').textContent = 'Route from OpenStreetMap geocoding and OSRM driving directions';
   }} catch (error) {{
-    summary.textContent = 'Allow location permission so the app can calculate the best route from your current place.';
+    summary.textContent = 'Allow location permission and check the destination spelling so the route can be calculated.';
   }}
 }}
 document.getElementById('optimizeRoutesBtn').onclick = optimizeBestRoute;
 document.getElementById('layersBtn').onclick = () => {{
-  trafficLayersVisible = !trafficLayersVisible;
-  if (trafficLayer) trafficLayer.setMap(trafficLayersVisible ? trafficMap : null);
-  if (transitLayer) transitLayer.setMap(trafficLayersVisible ? trafficMap : null);
-  document.getElementById('layersBtn').textContent = trafficLayersVisible ? 'Layers On' : 'Layers Off';
-  document.getElementById('fallbackTrafficMap').classList.toggle('grayscale', !trafficLayersVisible);
+  usingTopoLayer = !usingTopoLayer;
+  if (usingTopoLayer) {{
+    trafficMap.removeLayer(streetLayer);
+    topoLayer.addTo(trafficMap);
+  }} else {{
+    trafficMap.removeLayer(topoLayer);
+    streetLayer.addTo(trafficMap);
+  }}
+  document.getElementById('layersBtn').textContent = usingTopoLayer ? 'Street Map' : 'Topo Map';
 }};
-document.getElementById('zoomInBtn').onclick = () => trafficMap ? trafficMap.setZoom(trafficMap.getZoom() + 1) : setFallbackZoom(1);
-document.getElementById('zoomOutBtn').onclick = () => trafficMap ? trafficMap.setZoom(trafficMap.getZoom() - 1) : setFallbackZoom(-1);
+document.getElementById('zoomInBtn').onclick = () => trafficMap.setZoom(trafficMap.getZoom() + 1);
+document.getElementById('zoomOutBtn').onclick = () => trafficMap.setZoom(trafficMap.getZoom() - 1);
 document.getElementById('locateBtn').onclick = () => centerOnCurrentLocation(false).catch(() => {{}});
 document.getElementById('refreshTrafficBtn').onclick = refreshTrafficSummary;
+initOpenMap();
 refreshTrafficSummary();
 centerOnCurrentLocation(true).catch(() => {{}});
 const readFile = file => new Promise((resolve, reject) => {{ const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); }});
@@ -614,9 +589,8 @@ document.getElementById('reportForm').onsubmit = async event => {{
   document.getElementById('reportStatus').textContent = data.ok ? `Report sent to admin accident section from ${{location}}.` : 'Could not send report.';
   event.target.reset(); setLocation(document.getElementById('reportLocation'));
 }};
-</script>
-{maps_loader}"""
-    return html_page("I-TRAFFIC | Public Portal", body)
+</script>"""
+    return html_page("I-TRAFFIC | Public Portal", body, extra_head)
 
 
 def page_admin(user: dict | None) -> bytes:
@@ -779,7 +753,12 @@ class TrafficHandler(BaseHTTPRequestHandler):
         elif path == "/qr-direct":
             self.record_direct_qr(query, user)
         elif path == "/api/admin-state":
+            if not is_admin_user(user):
+                self.json_response({"ok": False, "error": "Admin access required"}, 403)
+                return
             self.json_response(admin_state())
+        elif path == "/api/route":
+            self.json_response(route_summary(query))
         elif path == "/api/traffic-summary":
             self.json_response(traffic_summary(query))
         elif path.startswith("/uploads/"):
@@ -802,6 +781,9 @@ class TrafficHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/report":
                 self.save_report(self.read_json(), user)
             elif parsed.path == "/api/signal":
+                if not is_admin_user(user):
+                    self.json_response({"ok": False, "error": "Admin access required"}, 403)
+                    return
                 payload = self.read_json()
                 signal = payload.get("signal", "stop")
                 priority = int(payload.get("priority_pass", -1))
@@ -819,6 +801,9 @@ class TrafficHandler(BaseHTTPRequestHandler):
                     )
                 self.json_response({"ok": True})
             elif parsed.path == "/api/control-toggle":
+                if not is_admin_user(user):
+                    self.json_response({"ok": False, "error": "Admin access required"}, 403)
+                    return
                 payload = self.read_json()
                 field = payload.get("field")
                 if field not in {"lane_diversion", "priority_pass"}:
@@ -956,6 +941,83 @@ def admin_state() -> dict:
     return {"signal": signal, "total_scans": total_scans, "latest_scans": latest_scans, "reports": reports}
 
 
+def fetch_json(url: str) -> dict | list:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "TrafficControlOS/1.0 contact=mohnishraj187@gmail.com",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def parse_destination(destination: str) -> dict | None:
+    cleaned = destination.strip()
+    parts = [part.strip() for part in cleaned.split(",")]
+    if len(parts) == 2:
+        try:
+            lat = float(parts[0])
+            lng = float(parts[1])
+            if -90 <= lat <= 90 and -180 <= lng <= 180:
+                return {"lat": lat, "lng": lng, "name": cleaned}
+        except ValueError:
+            pass
+
+    params = urllib.parse.urlencode({"format": "jsonv2", "limit": 1, "q": cleaned})
+    results = fetch_json(f"https://nominatim.openstreetmap.org/search?{params}")
+    if not isinstance(results, list) or not results:
+        return None
+    match = results[0]
+    return {
+        "lat": float(match["lat"]),
+        "lng": float(match["lon"]),
+        "name": match.get("display_name", cleaned),
+    }
+
+
+def route_summary(query: dict[str, list[str]]) -> dict:
+    try:
+        origin_lat = float(query.get("origin_lat", [""])[0])
+        origin_lng = float(query.get("origin_lng", [""])[0])
+    except ValueError:
+        return {"ok": False, "error": "Current location is required."}
+
+    destination_text = query.get("destination", [""])[0].strip()
+    if not destination_text:
+        return {"ok": False, "error": "Destination is required."}
+
+    try:
+        destination = parse_destination(destination_text)
+        if not destination:
+            return {"ok": False, "error": "Destination was not found."}
+
+        coords = f"{origin_lng},{origin_lat};{destination['lng']},{destination['lat']}"
+        params = urllib.parse.urlencode({"overview": "full", "geometries": "geojson", "steps": "false"})
+        route_data = fetch_json(f"https://router.project-osrm.org/route/v1/driving/{coords}?{params}")
+        routes = route_data.get("routes", []) if isinstance(route_data, dict) else []
+        if not routes:
+            return {"ok": False, "error": "No road route was found for that destination."}
+
+        route = routes[0]
+        distance_km_value = route.get("distance", 0) / 1000
+        duration_min_value = route.get("duration", 0) / 60
+        duration_text = f"{round(duration_min_value)} mins" if duration_min_value < 90 else f"{round(duration_min_value / 60, 1)} hrs"
+        return {
+            "ok": True,
+            "destination": destination,
+            "distance_km": round(distance_km_value, 1),
+            "distance_text": f"{round(distance_km_value, 1)} km",
+            "duration_min": round(duration_min_value),
+            "duration_text": duration_text,
+            "geometry": route.get("geometry", {"type": "LineString", "coordinates": []}),
+            "source": "openstreetmap_nominatim_osrm",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": f"Route service is unavailable: {exc}"}
+
+
 def distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     from math import asin, cos, radians, sin, sqrt
 
@@ -1025,8 +1087,8 @@ def traffic_summary(query: dict[str, list[str]] | None = None) -> dict:
         "trend": "Estimated from nearby congestion hotspots",
         "hotspots": formatted,
         "area": area,
-        "source": "google_maps_traffic_layer" if GOOGLE_MAPS_API_KEY else "location_model",
-        "source_label": "Google Maps traffic layer" if GOOGLE_MAPS_API_KEY else "Location-based local congestion model",
+        "source": "location_model",
+        "source_label": "Location-based local congestion model",
     }
     return summary
 
