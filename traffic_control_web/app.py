@@ -245,9 +245,51 @@ def page_public(user: dict | None) -> bytes:
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQHLyrcf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <style>
-    #osmTrafficMap { min-height: 500px; height: 100%; width: 100%; }
-    .leaflet-container { height: 100%; width: 100%; font-family: Inter, system-ui, sans-serif; }
+    #osmTrafficMap { position: relative; min-height: 500px; height: 100%; width: 100%; overflow: hidden; }
+    .leaflet-container { overflow: hidden; height: 100%; width: 100%; font-family: Inter, system-ui, sans-serif; background: #dbe7f1; outline-offset: 1px; }
+    .leaflet-pane,
+    .leaflet-tile,
+    .leaflet-marker-icon,
+    .leaflet-marker-shadow,
+    .leaflet-tile-container,
+    .leaflet-pane > svg,
+    .leaflet-pane > canvas,
+    .leaflet-zoom-box,
+    .leaflet-image-layer,
+    .leaflet-layer { position: absolute; left: 0; top: 0; }
     .leaflet-container img { max-width: none !important; max-height: none !important; }
+    .leaflet-tile { width: 256px !important; height: 256px !important; user-select: none; visibility: hidden; }
+    .leaflet-tile-loaded { visibility: inherit; }
+    .leaflet-map-pane,
+    .leaflet-tile-pane,
+    .leaflet-overlay-pane,
+    .leaflet-shadow-pane,
+    .leaflet-marker-pane,
+    .leaflet-tooltip-pane,
+    .leaflet-popup-pane { position: absolute; left: 0; top: 0; }
+    .leaflet-tile-pane { z-index: 200; }
+    .leaflet-overlay-pane { z-index: 400; }
+    .leaflet-shadow-pane { z-index: 500; }
+    .leaflet-marker-pane { z-index: 600; }
+    .leaflet-tooltip-pane { z-index: 650; }
+    .leaflet-popup-pane { z-index: 700; }
+    .leaflet-control { position: relative; z-index: 800; pointer-events: auto; float: left; clear: both; }
+    .leaflet-top, .leaflet-bottom { position: absolute; z-index: 1000; pointer-events: none; }
+    .leaflet-top { top: 10px; }
+    .leaflet-right { right: 10px; }
+    .leaflet-bottom { bottom: 10px; }
+    .leaflet-left { left: 10px; }
+    .leaflet-right .leaflet-control { float: right; }
+    .leaflet-bottom .leaflet-control { margin-bottom: 10px; }
+    .leaflet-top .leaflet-control { margin-top: 10px; }
+    .leaflet-left .leaflet-control { margin-left: 10px; }
+    .leaflet-right .leaflet-control { margin-right: 10px; }
+    .leaflet-control-zoom a { display: grid; place-items: center; width: 34px; height: 34px; border-bottom: 1px solid #d7dde6; background: #fff; color: #0b1c30; font: bold 22px/1 Inter, sans-serif; text-decoration: none; }
+    .leaflet-control-zoom a:first-child { border-radius: 6px 6px 0 0; }
+    .leaflet-control-zoom a:last-child { border-bottom: 0; border-radius: 0 0 6px 6px; }
+    .leaflet-control-zoom { border: 1px solid #d7dde6; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.12); overflow: hidden; }
+    .leaflet-control-attribution { display: none; }
+    .leaflet-interactive { cursor: pointer; }
     .route-dot { width: 18px; height: 18px; border-radius: 999px; border: 3px solid #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
     .route-dot-start { background: #0f766e; }
     .route-dot-end { background: #dc2626; }
@@ -352,6 +394,7 @@ function initOpenMap() {{
   }});
   L.control.zoom({{ position: 'bottomright' }}).addTo(trafficMap);
   setTimeout(() => trafficMap.invalidateSize(), 150);
+  setTimeout(() => trafficMap.invalidateSize(), 700);
   window.addEventListener('resize', () => trafficMap.invalidateSize());
   document.getElementById('mapSource').textContent = 'OpenStreetMap with stable estimated routing';
 }}
@@ -446,7 +489,11 @@ async function optimizeBestRoute() {{
     routeStartMarker = L.marker(coords[0], {{ icon: L.divIcon({{ className: '', html: '<div class="route-dot route-dot-start"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }}) }}).addTo(trafficMap).bindPopup('Start: your current location');
     destinationMarker = L.marker([route.destination.lat, route.destination.lng], {{ icon: L.divIcon({{ className: '', html: '<div class="route-dot route-dot-end"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }}) }}).addTo(trafficMap).bindPopup(route.destination.name || destination);
     trafficMap.invalidateSize();
-    setTimeout(() => trafficMap.fitBounds(routeLine.getBounds(), {{ padding: [52, 52], maxZoom: 15 }}), 80);
+    setTimeout(() => {{
+      trafficMap.invalidateSize();
+      trafficMap.fitBounds(routeLine.getBounds(), {{ padding: [52, 52], maxZoom: 15 }});
+    }}, 80);
+    setTimeout(() => trafficMap.invalidateSize(), 500);
     summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}}.`;
     document.getElementById('mapSource').textContent = 'Stable estimated route drawn from your current location';
   }} catch (error) {{
