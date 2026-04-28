@@ -66,6 +66,14 @@ def init_db() -> None:
                 priority_pass INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS geocode_cache (
+                query TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                lat REAL NOT NULL,
+                lng REAL NOT NULL,
+                created_at INTEGER NOT NULL
+            );
             INSERT OR IGNORE INTO signal_state (id, signal, lane_diversion, priority_pass, updated_at)
             VALUES (1, 'stop', 1, 0, strftime('%s', 'now'));
             """
@@ -88,6 +96,13 @@ def db_execute(query: str, params: tuple = ()) -> None:
     with sqlite3.connect(DB_PATH) as db:
         db.execute(query, params)
         db.commit()
+
+
+def db_execute_many(query: str, params: tuple = ()) -> int:
+    with sqlite3.connect(DB_PATH) as db:
+        cursor = db.execute(query, params)
+        db.commit()
+        return cursor.rowcount
 
 
 def html_page(title: str, body: str, extra_head: str = "") -> bytes:
@@ -1255,6 +1270,72 @@ def local_destination_match(destination: str) -> dict | None:
     return None
 
 
+def cached_destination(query: str) -> dict | None:
+    cache_key = query.strip().lower()
+    rows = db_rows("SELECT name, lat, lng FROM geocode_cache WHERE query = ?", (cache_key,))
+    if not rows:
+        return None
+    row = rows[0]
+    return {"lat": float(row["lat"]), "lng": float(row["lng"]), "name": row["name"]}
+
+
+def cache_destination(query: str, destination: dict) -> None:
+    cache_key = query.strip().lower()
+    db_execute(
+        """
+        INSERT OR REPLACE INTO geocode_cache (query, name, lat, lng, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (cache_key, destination["name"], destination["lat"], destination["lng"], int(time.time())),
+    )
+
+
+def geocode_query_variants(destination: str) -> list[str]:
+    cleaned = " ".join(destination.strip().split())
+    lowered = cleaned.lower()
+    variants = [cleaned]
+    has_city_or_country = any(part in lowered for part in ["india", "chennai", "bengaluru", "bangalore", "mumbai", "delhi"])
+    if not has_city_or_country:
+        variants.extend(
+            [
+                f"{cleaned}, Chennai, Tamil Nadu, India",
+                f"{cleaned}, Tamil Nadu, India",
+                f"{cleaned}, Bengaluru, Karnataka, India",
+                f"{cleaned}, Mumbai, Maharashtra, India",
+                f"{cleaned}, India",
+            ]
+        )
+    elif "india" not in lowered:
+        variants.append(f"{cleaned}, India")
+    return list(dict.fromkeys(variants))
+
+
+def nominatim_destination(destination: str) -> dict | None:
+    for query in geocode_query_variants(destination):
+        params = urllib.parse.urlencode(
+            {
+                "format": "jsonv2",
+                "limit": 1,
+                "countrycodes": "in",
+                "q": query,
+            }
+        )
+        try:
+            results = fetch_json(f"https://nominatim.openstreetmap.org/search?{params}")
+        except Exception:
+            continue
+        if isinstance(results, list) and results:
+            match = results[0]
+            found = {
+                "lat": float(match["lat"]),
+                "lng": float(match["lon"]),
+                "name": match.get("display_name", query),
+            }
+            cache_destination(destination, found)
+            return found
+    return None
+
+
 def parse_destination(destination: str) -> dict | None:
     cleaned = destination.strip()
     parts = [part.strip() for part in cleaned.split(",")]
@@ -1271,19 +1352,11 @@ def parse_destination(destination: str) -> dict | None:
     if local:
         return local
 
-    try:
-        params = urllib.parse.urlencode({"format": "jsonv2", "limit": 1, "q": cleaned})
-        results = fetch_json(f"https://nominatim.openstreetmap.org/search?{params}")
-        if not isinstance(results, list) or not results:
-            return None
-        match = results[0]
-        return {
-            "lat": float(match["lat"]),
-            "lng": float(match["lon"]),
-            "name": match.get("display_name", cleaned),
-        }
-    except Exception:
-        return None
+    cached = cached_destination(cleaned)
+    if cached:
+        return cached
+
+    return nominatim_destination(cleaned)
 
 
 def estimated_route_response(origin_lat: float, origin_lng: float, destination: dict) -> dict:
