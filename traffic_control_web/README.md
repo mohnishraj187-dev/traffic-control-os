@@ -75,12 +75,15 @@ The route API is exposed at `/api/route` and accepts `origin_lat`, `origin_lng`,
 - Admin QR and accident cards show where the request came from and include a Control button that selects that place before manual signal override.
 - Admin manual buttons post to `/api/signal`; the page updates the current signal state.
 - Admin control toggles post to `/api/control-toggle`.
-- Admin AI camera control shows simulated lane density, confidence, priority lane, and recommended signal timing.
+- Admin AI camera control can use the browser camera with TensorFlow.js COCO-SSD vehicle detection to estimate real lane density.
+- If no live camera feed is active, the admin AI panel falls back to simulated lane density for demos.
 - Admin "Apply AI Signal" posts to `/api/ai-apply`, which applies the current AI recommendation to the live signal state.
 
 ## Camera AI Roadmap
 
-The current AI camera panel is a stable prototype that simulates density from recent QR scans, accident reports, and time-based lane variation. To connect real cameras later:
+The admin dashboard now includes a real browser-camera prototype. Click "Start Camera" in the AI section, allow camera permission, choose the lane direction, and point the camera at a road or traffic video. The browser detects vehicles and posts density to `/api/camera-density`.
+
+For a production city system:
 
 - Run a camera worker near each junction using OpenCV plus a vehicle detector such as YOLO.
 - Count vehicles per lane and convert counts into density percentages.

@@ -31,6 +31,7 @@ ADMIN_EMAILS = {
 APP_BASE_URL = os.environ.get("APP_BASE_URL", f"http://{HOST}:{PORT}")
 
 SESSIONS: dict[str, dict] = {}
+CAMERA_FEED: dict[str, dict] = {}
 
 
 def init_db() -> None:
@@ -646,8 +647,30 @@ def page_admin(user: dict | None) -> bytes:
   </section>
   <section id="ai" class="border-y border-slate-200 bg-slate-50 p-6">
     <div class="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
-      <div><h2 class="headline text-lg font-semibold">AI Camera Traffic Control</h2><p class="text-sm text-slate-500">Prototype density feed for camera-based adaptive signals.</p></div>
+      <div><h2 class="headline text-lg font-semibold">AI Camera Traffic Control</h2><p class="text-sm text-slate-500">Use a live camera feed to detect vehicles and calculate lane density.</p></div>
       <div class="flex gap-2"><button id="refreshAiBtn" class="rounded-lg border bg-white px-4 py-2 text-sm font-bold">Refresh AI</button><button id="applyAiBtn" class="rounded-lg bg-slate-950 px-4 py-2 text-sm font-bold text-white">Apply AI Signal</button></div>
+    </div>
+    <div class="mb-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+      <article class="rounded-lg border bg-white p-4">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div><h3 class="font-bold">Live Camera Detector</h3><p class="text-xs text-slate-500">Point this device camera at a road or traffic video.</p></div>
+          <div class="flex flex-wrap gap-2">
+            <select id="cameraLane" class="rounded-lg border-slate-200 text-sm"><option>Northbound camera</option><option>Southbound camera</option><option>Eastbound camera</option><option>Westbound camera</option></select>
+            <button id="startVehicleCameraBtn" class="rounded-lg bg-slate-950 px-3 py-2 text-sm font-bold text-white">Start Camera</button>
+            <button id="stopVehicleCameraBtn" class="rounded-lg border bg-white px-3 py-2 text-sm font-bold">Stop</button>
+          </div>
+        </div>
+        <div class="relative overflow-hidden rounded-lg bg-slate-950">
+          <video id="vehicleVideo" class="h-72 w-full object-cover" playsinline muted></video>
+          <canvas id="vehicleCanvas" class="absolute inset-0 h-full w-full"></canvas>
+        </div>
+      </article>
+      <article class="rounded-lg border bg-white p-4">
+        <p class="text-xs font-bold uppercase text-slate-400">Real Camera Feed</p>
+        <p id="vehicleCount" class="mt-2 font-mono text-3xl font-bold">0 vehicles</p>
+        <p id="vehicleDensity" class="mt-2 text-sm text-slate-600">Density: 0%</p>
+        <p id="vehicleCameraStatus" class="mt-3 text-sm text-slate-500">Camera is off. Start it to send real density data.</p>
+      </article>
     </div>
     <div class="grid gap-4 lg:grid-cols-3">
       <article class="rounded-lg border bg-white p-4">
@@ -663,7 +686,7 @@ def page_admin(user: dict | None) -> bytes:
       <article class="rounded-lg border bg-white p-4">
         <p class="text-xs font-bold uppercase text-slate-400">Priority Lane</p>
         <p id="aiLane" class="mt-2 text-xl font-bold">-</p>
-        <p id="aiStatus" class="mt-2 text-sm text-slate-600">Camera model online in simulation mode.</p>
+        <p id="aiStatus" class="mt-2 text-sm text-slate-600">Waiting for real camera feed.</p>
       </article>
     </div>
     <div id="aiLanes" class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4"></div>
@@ -674,9 +697,16 @@ def page_admin(user: dict | None) -> bytes:
   </section>
 </main>
 <nav class="fixed bottom-0 left-0 right-0 z-50 flex justify-around border-t bg-white px-4 py-3 md:hidden"><a class="text-xs font-bold" href="#map">Map</a><a class="text-xs font-bold" href="#control">Control</a><a class="text-xs font-bold" href="#ai">AI</a><a class="text-xs font-bold" href="#accidents">Accidents</a></nav>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <script>
 async function postJson(url, payload) {{ const res = await fetch(url, {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload) }}); return res.json(); }}
 let selectedControlPlace = {{ label: 'Silk Board Junction', placeLocation: '12.9177, 77.6238' }};
+let vehicleModel = null;
+let vehicleStream = null;
+let vehicleLoopRunning = false;
+let lastCameraPost = 0;
+const vehicleClasses = new Set(['car', 'bus', 'truck', 'motorcycle', 'bicycle']);
 function selectControlPlace(label, placeLocation, jumpToControl = true) {{
   selectedControlPlace = {{ label: label || 'Selected traffic node', placeLocation: placeLocation || 'Unknown location' }};
   document.getElementById('currentNodeLabel').textContent = selectedControlPlace.label;
@@ -736,6 +766,76 @@ function renderAiTraffic(ai) {{
       <p class="mt-2 text-xs text-slate-500">${{lane.vehicle_count}} vehicles estimated from camera feed</p>
     </article>`).join('');
 }}
+async function loadVehicleModel() {{
+  if (vehicleModel) return vehicleModel;
+  document.getElementById('vehicleCameraStatus').textContent = 'Loading vehicle detection model...';
+  vehicleModel = await cocoSsd.load();
+  document.getElementById('vehicleCameraStatus').textContent = 'Vehicle model loaded. Starting detection...';
+  return vehicleModel;
+}}
+function drawDetections(predictions) {{
+  const video = document.getElementById('vehicleVideo');
+  const canvas = document.getElementById('vehicleCanvas');
+  const context = canvas.getContext('2d');
+  canvas.width = video.videoWidth || video.clientWidth;
+  canvas.height = video.videoHeight || video.clientHeight;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.strokeStyle = '#fd761a';
+  context.lineWidth = 3;
+  context.font = '16px Inter, sans-serif';
+  predictions.forEach(item => {{
+    const [x, y, width, height] = item.bbox;
+    context.strokeRect(x, y, width, height);
+    context.fillStyle = '#fd761a';
+    context.fillText(`${{item.class}} ${{Math.round(item.score * 100)}}%`, x, Math.max(18, y - 5));
+  }});
+}}
+async function postCameraDensity(vehicleCount, density, confidence) {{
+  const now = Date.now();
+  if (now - lastCameraPost < 1800) return;
+  lastCameraPost = now;
+  await postJson('/api/camera-density', {{
+    lane: document.getElementById('cameraLane').value,
+    vehicle_count: vehicleCount,
+    density,
+    confidence
+  }});
+}}
+async function detectVehicleFrame() {{
+  if (!vehicleLoopRunning || !vehicleModel) return;
+  const video = document.getElementById('vehicleVideo');
+  if (video.readyState >= 2) {{
+    const predictions = await vehicleModel.detect(video);
+    const vehicles = predictions.filter(item => vehicleClasses.has(item.class) && item.score >= 0.45);
+    const density = Math.min(100, Math.round(vehicles.length * 14));
+    const confidence = vehicles.length ? Math.round(vehicles.reduce((sum, item) => sum + item.score, 0) / vehicles.length * 100) : 70;
+    drawDetections(vehicles);
+    document.getElementById('vehicleCount').textContent = `${{vehicles.length}} vehicles`;
+    document.getElementById('vehicleDensity').textContent = `Density: ${{density}}%`;
+    document.getElementById('vehicleCameraStatus').textContent = `Sending real camera data for ${{document.getElementById('cameraLane').value}}`;
+    await postCameraDensity(vehicles.length, density, confidence);
+  }}
+  requestAnimationFrame(detectVehicleFrame);
+}}
+document.getElementById('startVehicleCameraBtn').onclick = async () => {{
+  try {{
+    const video = document.getElementById('vehicleVideo');
+    await loadVehicleModel();
+    vehicleStream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode: {{ ideal: 'environment' }} }}, audio: false }});
+    video.srcObject = vehicleStream;
+    await video.play();
+    vehicleLoopRunning = true;
+    detectVehicleFrame();
+  }} catch (error) {{
+    document.getElementById('vehicleCameraStatus').textContent = 'Camera/model could not start. Allow camera permission and reload if needed.';
+  }}
+}};
+document.getElementById('stopVehicleCameraBtn').onclick = () => {{
+  vehicleLoopRunning = false;
+  if (vehicleStream) vehicleStream.getTracks().forEach(track => track.stop());
+  vehicleStream = null;
+  document.getElementById('vehicleCameraStatus').textContent = 'Camera stopped.';
+}};
 async function refresh() {{
   const data = await (await fetch('/api/admin-state')).json();
   document.getElementById('qrCount').textContent = data.total_scans;
@@ -881,6 +981,23 @@ class TrafficHandler(BaseHTTPRequestHandler):
                     (ai["recommended_signal"], 1 if ai["emergency_priority"] else 0, target_label, target_location, int(time.time())),
                 )
                 self.json_response({"ok": True, "traffic_ai": ai})
+            elif parsed.path == "/api/camera-density":
+                if not is_admin_user(user):
+                    self.json_response({"ok": False, "error": "Admin access required"}, 403)
+                    return
+                payload = self.read_json()
+                lane = payload.get("lane", "Eastbound camera")
+                density = max(0, min(100, int(payload.get("density", 0))))
+                vehicle_count = max(0, int(payload.get("vehicle_count", 0)))
+                confidence = max(0, min(100, int(payload.get("confidence", 70))))
+                CAMERA_FEED[lane] = {
+                    "name": lane,
+                    "density": density,
+                    "vehicle_count": vehicle_count,
+                    "confidence": confidence,
+                    "updated_at": int(time.time()),
+                }
+                self.json_response({"ok": True, "traffic_ai": traffic_ai_state()})
             else:
                 self.json_response({"ok": False, "error": "Not found"}, 404)
         except Exception as exc:
@@ -1013,6 +1130,40 @@ def admin_state() -> dict:
 
 def traffic_ai_state() -> dict:
     now = int(time.time())
+    live_lanes = [feed for feed in CAMERA_FEED.values() if now - int(feed.get("updated_at", 0)) <= 20]
+    if live_lanes:
+        lane_names = ["Northbound camera", "Southbound camera", "Eastbound camera", "Westbound camera"]
+        camera_lanes = []
+        for lane_name in lane_names:
+            feed = CAMERA_FEED.get(lane_name)
+            if feed and now - int(feed.get("updated_at", 0)) <= 20:
+                camera_lanes.append(
+                    {
+                        "name": lane_name,
+                        "density": int(feed.get("density", 0)),
+                        "vehicle_count": int(feed.get("vehicle_count", 0)),
+                    }
+                )
+            else:
+                camera_lanes.append({"name": lane_name, "density": 0, "vehicle_count": 0})
+        priority = max(camera_lanes, key=lambda lane: lane["density"])
+        avg_density = round(sum(lane["density"] for lane in camera_lanes) / len(camera_lanes))
+        confidence = max(int(feed.get("confidence", 70)) for feed in live_lanes)
+        recommended_signal = "go" if priority["density"] >= 35 else "slow" if avg_density >= 15 else "ai"
+        green_seconds = min(95, max(20, 20 + priority["density"]))
+        return {
+            "mode": "live_camera",
+            "lanes": camera_lanes,
+            "priority_lane": priority["name"],
+            "average_density": avg_density,
+            "recommended_signal": recommended_signal,
+            "green_seconds": green_seconds,
+            "confidence": confidence,
+            "emergency_priority": priority["density"] >= 75,
+            "reason": f"Live camera detected {priority['vehicle_count']} vehicles on {priority['name']} with {priority['density']}% density.",
+            "updated_at": time.strftime("%H:%M:%S", time.localtime(max(feed["updated_at"] for feed in live_lanes))),
+        }
+
     minute_bucket = now // 60
     scan_count = db_rows("SELECT COUNT(*) AS count FROM qr_scans WHERE created_at > ?", (now - 900,))[0]["count"]
     report_count = db_rows("SELECT COUNT(*) AS count FROM accident_reports WHERE created_at > ?", (now - 1800,))[0]["count"]
