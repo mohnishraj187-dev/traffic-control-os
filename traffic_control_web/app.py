@@ -232,13 +232,7 @@ def page_public(user: dict | None) -> bytes:
   <style>
     #osmTrafficMap { min-height: 500px; height: 100%; width: 100%; }
     .leaflet-container { height: 100%; width: 100%; font-family: Inter, system-ui, sans-serif; }
-    .leaflet-pane,
-    .leaflet-map-pane,
-    .leaflet-layer,
-    .leaflet-tile-pane,
-    .leaflet-overlay-pane,
-    .leaflet-marker-pane { position: absolute; inset: 0; }
-    .leaflet-tile { width: 256px !important; height: 256px !important; max-width: none !important; max-height: none !important; }
+    .leaflet-container img { max-width: none !important; max-height: none !important; }
   </style>"""
     body = f"""
 <aside class="fixed left-0 top-0 z-50 hidden h-full w-64 flex-col border-r border-slate-200 bg-white py-6 lg:flex">
@@ -1227,6 +1221,10 @@ LOCAL_DESTINATIONS = [
     ("t nagar", "T Nagar, Chennai", 13.0418, 80.2341),
     ("anna salai", "Anna Salai, Chennai", 13.0619, 80.2619),
     ("sowcarpet", "Sowcarpet, Chennai", 13.0940, 80.2791),
+    ("mint street", "Mint Street, Sowcarpet, Chennai", 13.0969, 80.2795),
+    ("parrys corner", "Parry's Corner, Chennai", 13.0878, 80.2893),
+    ("george town", "George Town, Chennai", 13.0965, 80.2865),
+    ("chennai central", "Chennai Central Railway Station", 13.0827, 80.2757),
     ("kathipara", "Kathipara Junction, Chennai", 13.0076, 80.2012),
     ("silk board", "Silk Board Junction, Bengaluru", 12.9177, 77.6238),
     ("marathahalli", "Marathahalli Bridge, Bengaluru", 12.9569, 77.7011),
