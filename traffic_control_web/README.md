@@ -75,3 +75,14 @@ The route API is exposed at `/api/route` and accepts `origin_lat`, `origin_lng`,
 - Admin QR and accident cards show where the request came from and include a Control button that selects that place before manual signal override.
 - Admin manual buttons post to `/api/signal`; the page updates the current signal state.
 - Admin control toggles post to `/api/control-toggle`.
+- Admin AI camera control shows simulated lane density, confidence, priority lane, and recommended signal timing.
+- Admin "Apply AI Signal" posts to `/api/ai-apply`, which applies the current AI recommendation to the live signal state.
+
+## Camera AI Roadmap
+
+The current AI camera panel is a stable prototype that simulates density from recent QR scans, accident reports, and time-based lane variation. To connect real cameras later:
+
+- Run a camera worker near each junction using OpenCV plus a vehicle detector such as YOLO.
+- Count vehicles per lane and convert counts into density percentages.
+- Post those lane densities to the backend or replace `traffic_ai_state()` with a database-backed feed.
+- Keep the admin dashboard as the control room for confidence, signal recommendation, and manual override.

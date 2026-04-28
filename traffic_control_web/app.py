@@ -616,6 +616,7 @@ def page_admin(user: dict | None) -> bytes:
   <aside class="fixed left-0 top-0 z-50 hidden h-full w-16 flex-col border-r border-slate-200 bg-slate-50 pt-20 md:flex">
     <a class="grid place-items-center p-4 text-slate-500" href="#map"><span class="material-symbols-outlined">map</span></a>
     <a class="grid place-items-center bg-slate-950 p-4 text-white" href="#control"><span class="material-symbols-outlined">traffic</span></a>
+    <a class="grid place-items-center p-4 text-slate-500" href="#ai"><span class="material-symbols-outlined">memory</span></a>
     <a class="grid place-items-center p-4 text-slate-500" href="#accidents"><span class="material-symbols-outlined">report_problem</span></a>
   </aside>
   <section id="map" class="relative h-[353px] w-full overflow-hidden bg-slate-200">
@@ -643,12 +644,36 @@ def page_admin(user: dict | None) -> bytes:
     </div>
     <div class="space-y-3"><button id="emergencyBtn" class="w-full rounded-lg bg-slate-950 py-4 font-bold text-white">EMERGENCY CLEAR SEQUENCE</button><button data-signal="ai" class="signal-btn w-full rounded-lg border bg-white py-4 font-bold text-slate-950">RESUME AI CONTROL</button></div>
   </section>
+  <section id="ai" class="border-y border-slate-200 bg-slate-50 p-6">
+    <div class="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
+      <div><h2 class="headline text-lg font-semibold">AI Camera Traffic Control</h2><p class="text-sm text-slate-500">Prototype density feed for camera-based adaptive signals.</p></div>
+      <div class="flex gap-2"><button id="refreshAiBtn" class="rounded-lg border bg-white px-4 py-2 text-sm font-bold">Refresh AI</button><button id="applyAiBtn" class="rounded-lg bg-slate-950 px-4 py-2 text-sm font-bold text-white">Apply AI Signal</button></div>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-3">
+      <article class="rounded-lg border bg-white p-4">
+        <p class="text-xs font-bold uppercase text-slate-400">Recommended Signal</p>
+        <p id="aiSignal" class="mt-2 font-mono text-3xl font-bold text-[#fd761a]">AI</p>
+        <p id="aiReason" class="mt-2 text-sm text-slate-600">Waiting for camera density feed...</p>
+      </article>
+      <article class="rounded-lg border bg-white p-4">
+        <p class="text-xs font-bold uppercase text-slate-400">Camera Confidence</p>
+        <p id="aiConfidence" class="mt-2 font-mono text-3xl font-bold">0%</p>
+        <p id="aiCycle" class="mt-2 text-sm text-slate-600">Signal cycle not calculated yet.</p>
+      </article>
+      <article class="rounded-lg border bg-white p-4">
+        <p class="text-xs font-bold uppercase text-slate-400">Priority Lane</p>
+        <p id="aiLane" class="mt-2 text-xl font-bold">-</p>
+        <p id="aiStatus" class="mt-2 text-sm text-slate-600">Camera model online in simulation mode.</p>
+      </article>
+    </div>
+    <div id="aiLanes" class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4"></div>
+  </section>
   <section id="accidents" class="p-6">
     <div class="mb-4 flex items-center justify-between"><h2 class="headline text-lg font-semibold">Accident Section</h2><span id="reportCount" class="rounded-full bg-orange-100 px-3 py-1 text-xs font-bold text-orange-700">0 reports</span></div>
     <div id="reports" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"></div>
   </section>
 </main>
-<nav class="fixed bottom-0 left-0 right-0 z-50 flex justify-around border-t bg-white px-4 py-3 md:hidden"><a class="text-xs font-bold" href="#map">Map</a><a class="text-xs font-bold" href="#control">Control</a><a class="text-xs font-bold" href="#accidents">Accidents</a></nav>
+<nav class="fixed bottom-0 left-0 right-0 z-50 flex justify-around border-t bg-white px-4 py-3 md:hidden"><a class="text-xs font-bold" href="#map">Map</a><a class="text-xs font-bold" href="#control">Control</a><a class="text-xs font-bold" href="#ai">AI</a><a class="text-xs font-bold" href="#accidents">Accidents</a></nav>
 <script>
 async function postJson(url, payload) {{ const res = await fetch(url, {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload) }}); return res.json(); }}
 let selectedControlPlace = {{ label: 'Silk Board Junction', placeLocation: '12.9177, 77.6238' }};
@@ -694,6 +719,23 @@ function renderReports(reports) {{
     </article>`).join('') || '<p class="text-slate-500">No accident reports yet.</p>';
   document.querySelectorAll('#reports .control-place-btn').forEach(btn => btn.onclick = () => selectControlPlace(btn.dataset.label, btn.dataset.location));
 }}
+function renderAiTraffic(ai) {{
+  document.getElementById('aiSignal').textContent = ai.recommended_signal.toUpperCase();
+  document.getElementById('aiReason').textContent = ai.reason;
+  document.getElementById('aiConfidence').textContent = `${{ai.confidence}}%`;
+  document.getElementById('aiCycle').textContent = `Green window: ${{ai.green_seconds}} seconds`;
+  document.getElementById('aiLane').textContent = ai.priority_lane;
+  document.getElementById('aiStatus').textContent = `Updated ${{ai.updated_at}}`;
+  document.getElementById('aiLanes').innerHTML = ai.lanes.map(lane => `
+    <article class="rounded-lg border bg-white p-4">
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <h3 class="font-bold">${{lane.name}}</h3>
+        <span class="rounded bg-slate-100 px-2 py-1 font-mono text-xs">${{lane.density}}%</span>
+      </div>
+      <div class="h-2 overflow-hidden rounded bg-slate-100"><div class="h-full rounded bg-[#fd761a]" style="width: ${{lane.density}}%"></div></div>
+      <p class="mt-2 text-xs text-slate-500">${{lane.vehicle_count}} vehicles estimated from camera feed</p>
+    </article>`).join('');
+}}
 async function refresh() {{
   const data = await (await fetch('/api/admin-state')).json();
   document.getElementById('qrCount').textContent = data.total_scans;
@@ -703,11 +745,14 @@ async function refresh() {{
   paintSignal(data.signal.signal);
   renderScanRequests(data.latest_scans);
   renderReports(data.reports);
+  renderAiTraffic(data.traffic_ai);
 }}
 document.querySelectorAll('.signal-btn').forEach(btn => btn.onclick = async () => {{ await postJson('/api/signal', {{signal: btn.dataset.signal, target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }});
 document.getElementById('laneBtn').onclick = async () => {{ await postJson('/api/control-toggle', {{field: 'lane_diversion'}}); refresh(); }};
 document.getElementById('priorityBtn').onclick = async () => {{ await postJson('/api/control-toggle', {{field: 'priority_pass'}}); refresh(); }};
 document.getElementById('emergencyBtn').onclick = async () => {{ await postJson('/api/signal', {{signal: 'go', priority_pass: 1, target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }};
+document.getElementById('refreshAiBtn').onclick = refresh;
+document.getElementById('applyAiBtn').onclick = async () => {{ const res = await postJson('/api/ai-apply', {{target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); document.getElementById('aiStatus').textContent = res.ok ? 'AI recommendation applied to live signal.' : (res.error || 'AI apply failed.'); refresh(); }};
 refresh(); setInterval(refresh, 2500);
 </script>"""
     return html_page("Traffic Operations Center - Manual Control", body)
@@ -823,6 +868,19 @@ class TrafficHandler(BaseHTTPRequestHandler):
                     return
                 db_execute(f"UPDATE signal_state SET {field} = CASE {field} WHEN 1 THEN 0 ELSE 1 END, updated_at = ? WHERE id = 1", (int(time.time()),))
                 self.json_response({"ok": True})
+            elif parsed.path == "/api/ai-apply":
+                if not is_admin_user(user):
+                    self.json_response({"ok": False, "error": "Admin access required"}, 403)
+                    return
+                payload = self.read_json()
+                ai = traffic_ai_state()
+                target_label = payload.get("target_label") or ai["priority_lane"]
+                target_location = payload.get("target_location") or "AI camera network"
+                db_execute(
+                    "UPDATE signal_state SET signal = ?, priority_pass = ?, target_label = ?, target_location = ?, updated_at = ? WHERE id = 1",
+                    (ai["recommended_signal"], 1 if ai["emergency_priority"] else 0, target_label, target_location, int(time.time())),
+                )
+                self.json_response({"ok": True, "traffic_ai": ai})
             else:
                 self.json_response({"ok": False, "error": "Not found"}, 404)
         except Exception as exc:
@@ -950,7 +1008,48 @@ def admin_state() -> dict:
     reports = db_rows("SELECT * FROM accident_reports ORDER BY id DESC LIMIT 30")
     for report in reports:
         report["image_url"] = f"/uploads/{report['image_filename']}" if report.get("image_filename") else ""
-    return {"signal": signal, "total_scans": total_scans, "latest_scans": latest_scans, "reports": reports}
+    return {"signal": signal, "total_scans": total_scans, "latest_scans": latest_scans, "reports": reports, "traffic_ai": traffic_ai_state()}
+
+
+def traffic_ai_state() -> dict:
+    now = int(time.time())
+    minute_bucket = now // 60
+    scan_count = db_rows("SELECT COUNT(*) AS count FROM qr_scans WHERE created_at > ?", (now - 900,))[0]["count"]
+    report_count = db_rows("SELECT COUNT(*) AS count FROM accident_reports WHERE created_at > ?", (now - 1800,))[0]["count"]
+    lanes = [
+        {"name": "Northbound camera", "base": 42},
+        {"name": "Southbound camera", "base": 36},
+        {"name": "Eastbound camera", "base": 48},
+        {"name": "Westbound camera", "base": 32},
+    ]
+    camera_lanes = []
+    for index, lane in enumerate(lanes):
+        wave = ((minute_bucket + index * 3) % 11) * 4
+        density = min(96, lane["base"] + wave + scan_count * 3 + report_count * 5)
+        vehicle_count = max(3, round(density * 0.7 + index * 2))
+        camera_lanes.append({"name": lane["name"], "density": density, "vehicle_count": vehicle_count})
+
+    priority = max(camera_lanes, key=lambda lane: lane["density"])
+    avg_density = round(sum(lane["density"] for lane in camera_lanes) / len(camera_lanes))
+    emergency_priority = report_count > 0 or priority["density"] >= 85
+    recommended_signal = "go" if priority["density"] >= 70 else "slow" if avg_density >= 45 else "ai"
+    green_seconds = min(95, max(25, 20 + priority["density"]))
+    confidence = min(98, 72 + abs(priority["density"] - avg_density) // 2 + scan_count + report_count * 3)
+    reason = f"{priority['name']} has the highest density at {priority['density']}%."
+    if emergency_priority:
+        reason += " Emergency or high-density priority is active."
+    return {
+        "mode": "simulation",
+        "lanes": camera_lanes,
+        "priority_lane": priority["name"],
+        "average_density": avg_density,
+        "recommended_signal": recommended_signal,
+        "green_seconds": green_seconds,
+        "confidence": confidence,
+        "emergency_priority": emergency_priority,
+        "reason": reason,
+        "updated_at": time.strftime("%H:%M:%S", time.localtime(now)),
+    }
 
 
 def fetch_json(url: str) -> dict | list:
