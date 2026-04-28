@@ -229,7 +229,9 @@ def page_public(user: dict | None) -> bytes:
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQHLyrcf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <style>
+    #osmTrafficMap { min-height: 500px; height: 100%; width: 100%; }
     .leaflet-container { height: 100%; width: 100%; font-family: Inter, system-ui, sans-serif; }
+    .leaflet-tile-container img { max-width: none !important; max-height: none !important; }
   </style>"""
     body = f"""
 <aside class="fixed left-0 top-0 z-50 hidden h-full w-64 flex-col border-r border-slate-200 bg-white py-6 lg:flex">
@@ -328,6 +330,8 @@ function initOpenMap() {{
     attribution: '&copy; OpenStreetMap contributors, SRTM | OpenTopoMap'
   }});
   L.control.zoom({{ position: 'bottomright' }}).addTo(trafficMap);
+  setTimeout(() => trafficMap.invalidateSize(), 150);
+  window.addEventListener('resize', () => trafficMap.invalidateSize());
   document.getElementById('mapSource').textContent = 'OpenStreetMap tiles with OSRM routing';
 }}
 function renderHotspots(summary) {{
@@ -372,6 +376,7 @@ async function centerOnCurrentLocation(fromAutoLoad = false) {{
     if (fallbackLocation) fallbackLocation.textContent = `Your current location: ${{center.lat.toFixed(6)}}, ${{center.lng.toFixed(6)}}`;
     if (trafficMap) {{
       trafficMap.setView([center.lat, center.lng], 15);
+      trafficMap.invalidateSize();
       if (!currentLocationMarker) {{
         currentLocationMarker = L.marker([center.lat, center.lng]).addTo(trafficMap).bindPopup('Your current location');
       }} else {{
@@ -411,9 +416,11 @@ async function optimizeBestRoute() {{
     if (destinationMarker) destinationMarker.remove();
     routeLine = L.polyline(coords, {{ color: '#fd761a', weight: 6, opacity: 0.9 }}).addTo(trafficMap);
     destinationMarker = L.marker([route.destination.lat, route.destination.lng]).addTo(trafficMap).bindPopup(route.destination.name || destination);
+    trafficMap.invalidateSize();
     trafficMap.fitBounds(routeLine.getBounds(), {{ padding: [36, 36] }});
-    summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}} by road.`;
-    document.getElementById('mapSource').textContent = 'Route from OpenStreetMap geocoding and OSRM driving directions';
+    const routeType = route.estimated ? 'estimated route' : 'road route';
+    summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}} (${{routeType}}).`;
+    document.getElementById('mapSource').textContent = route.estimated ? 'Estimated route shown because the free road-routing service is busy' : 'Route from OpenStreetMap geocoding and OSRM driving directions';
   }} catch (error) {{
     summary.textContent = 'Allow location permission and check the destination spelling so the route can be calculated.';
   }}
@@ -977,6 +984,32 @@ def parse_destination(destination: str) -> dict | None:
     }
 
 
+def estimated_route_response(origin_lat: float, origin_lng: float, destination: dict) -> dict:
+    distance_km_value = distance_km(origin_lat, origin_lng, destination["lat"], destination["lng"])
+    duration_min_value = max(3, round((distance_km_value / 28) * 60))
+    duration_text = f"{duration_min_value} mins" if duration_min_value < 90 else f"{round(duration_min_value / 60, 1)} hrs"
+    midpoint_lat = (origin_lat + destination["lat"]) / 2
+    midpoint_lng = (origin_lng + destination["lng"]) / 2
+    return {
+        "ok": True,
+        "estimated": True,
+        "destination": destination,
+        "distance_km": distance_km_value,
+        "distance_text": f"{distance_km_value} km",
+        "duration_min": duration_min_value,
+        "duration_text": duration_text,
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [
+                [origin_lng, origin_lat],
+                [midpoint_lng, midpoint_lat],
+                [destination["lng"], destination["lat"]],
+            ],
+        },
+        "source": "local_estimated_route",
+    }
+
+
 def route_summary(query: dict[str, list[str]]) -> dict:
     try:
         origin_lat = float(query.get("origin_lat", [""])[0])
@@ -998,7 +1031,7 @@ def route_summary(query: dict[str, list[str]]) -> dict:
         route_data = fetch_json(f"https://router.project-osrm.org/route/v1/driving/{coords}?{params}")
         routes = route_data.get("routes", []) if isinstance(route_data, dict) else []
         if not routes:
-            return {"ok": False, "error": "No road route was found for that destination."}
+            return estimated_route_response(origin_lat, origin_lng, destination)
 
         route = routes[0]
         distance_km_value = route.get("distance", 0) / 1000
@@ -1015,6 +1048,8 @@ def route_summary(query: dict[str, list[str]]) -> dict:
             "source": "openstreetmap_nominatim_osrm",
         }
     except Exception as exc:
+        if "destination" in locals():
+            return estimated_route_response(origin_lat, origin_lng, destination)
         return {"ok": False, "error": f"Route service is unavailable: {exc}"}
 
 
