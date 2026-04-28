@@ -233,6 +233,9 @@ def page_public(user: dict | None) -> bytes:
     #osmTrafficMap { min-height: 500px; height: 100%; width: 100%; }
     .leaflet-container { height: 100%; width: 100%; font-family: Inter, system-ui, sans-serif; }
     .leaflet-container img { max-width: none !important; max-height: none !important; }
+    .route-dot { width: 18px; height: 18px; border-radius: 999px; border: 3px solid #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+    .route-dot-start { background: #0f766e; }
+    .route-dot-end { background: #dc2626; }
   </style>"""
     body = f"""
 <aside class="fixed left-0 top-0 z-50 hidden h-full w-64 flex-col border-r border-slate-200 bg-white py-6 lg:flex">
@@ -311,8 +314,10 @@ let trafficMap;
 let streetLayer;
 let topoLayer;
 let routeLine;
+let routeShadowLine;
 let currentLocationMarker;
 let destinationMarker;
+let routeStartMarker;
 let usingTopoLayer = false;
 let routeIndex = 0;
 const routeFocus = [
@@ -379,7 +384,7 @@ async function centerOnCurrentLocation(fromAutoLoad = false) {{
       trafficMap.setView([center.lat, center.lng], 15);
       trafficMap.invalidateSize();
       if (!currentLocationMarker) {{
-        currentLocationMarker = L.marker([center.lat, center.lng]).addTo(trafficMap).bindPopup('Your current location');
+        currentLocationMarker = L.circleMarker([center.lat, center.lng], {{ radius: 8, color: '#fff', weight: 3, fillColor: '#0f766e', fillOpacity: 1 }}).addTo(trafficMap).bindPopup('Your current location');
       }} else {{
         currentLocationMarker.setLatLng([center.lat, center.lng]);
       }}
@@ -413,12 +418,20 @@ async function optimizeBestRoute() {{
       return;
     }}
     const coords = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+    if (!coords.length) {{
+      summary.textContent = 'Route could not be drawn on the map.';
+      return;
+    }}
     if (routeLine) routeLine.remove();
+    if (routeShadowLine) routeShadowLine.remove();
     if (destinationMarker) destinationMarker.remove();
-    routeLine = L.polyline(coords, {{ color: '#fd761a', weight: 6, opacity: 0.9 }}).addTo(trafficMap);
-    destinationMarker = L.marker([route.destination.lat, route.destination.lng]).addTo(trafficMap).bindPopup(route.destination.name || destination);
+    if (routeStartMarker) routeStartMarker.remove();
+    routeShadowLine = L.polyline(coords, {{ color: '#0b1c30', weight: 12, opacity: 0.45 }}).addTo(trafficMap);
+    routeLine = L.polyline(coords, {{ color: '#fd761a', weight: 7, opacity: 1 }}).addTo(trafficMap);
+    routeStartMarker = L.marker(coords[0], {{ icon: L.divIcon({{ className: '', html: '<div class="route-dot route-dot-start"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }}) }}).addTo(trafficMap).bindPopup('Start: your current location');
+    destinationMarker = L.marker([route.destination.lat, route.destination.lng], {{ icon: L.divIcon({{ className: '', html: '<div class="route-dot route-dot-end"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }}) }}).addTo(trafficMap).bindPopup(route.destination.name || destination);
     trafficMap.invalidateSize();
-    trafficMap.fitBounds(routeLine.getBounds(), {{ padding: [36, 36] }});
+    setTimeout(() => trafficMap.fitBounds(routeLine.getBounds(), {{ padding: [52, 52], maxZoom: 15 }}), 80);
     summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}}.`;
     document.getElementById('mapSource').textContent = 'Stable estimated route drawn from your current location';
   }} catch (error) {{
