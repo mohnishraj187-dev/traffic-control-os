@@ -1,0 +1,24 @@
+# Example config for ESP32-CAM stream (VGA 640x480)
+webhook_url: null
+ai_api_url: 'https://traffic-control-os.onrender.com'
+ai_token: 'dev-traffic-node'
+dashboard_lane: 'Eastbound camera'
+dashboard_location: 'ESP32-CAM live feed'
+model: 'models\\yolov8n.pt'
+source: 'http://192.168.1.5:81/stream'
+post_interval: 5
+detection_conf: 0.15
+count_window_s: 60
+max_vehicles_for_density: 20
+
+# Recommended ESP32 camera settings (apply on device sketch):
+#   frame_size = FRAMESIZE_VGA   # 640x480
+#   jpeg_quality = 10            # lower number means better JPEG quality
+#   fb_count = 2                 # smoother streaming
+
+# Lanes: pixel coordinates for VGA (640x480). Adjust if your camera is mounted differently.
+lanes:
+  - name: north_south
+    rect: [0, 0, 640, 240]
+  - name: east_west
+    rect: [0, 240, 640, 480]

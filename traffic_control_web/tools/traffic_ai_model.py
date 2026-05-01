@@ -7,12 +7,14 @@ import urllib.request
 
 
 VEHICLE_LABELS = {
-    "car": "cars",
-    "bus": "buses",
-    "truck": "trucks",
-    "motorcycle": "motorcycles",
     "bicycle": "bicycles",
+    "car": "cars",
+    "motorcycle": "motorcycles",
+    "bus": "buses",
+    "train": "trains",
+    "truck": "trucks",
 }
+VEHICLE_CLASS_IDS = [1, 2, 3, 5, 6, 7]
 
 
 def post_ai_update(api_url: str, payload: dict) -> None:
@@ -62,7 +64,7 @@ def run_model(args: argparse.Namespace) -> None:
         if time.time() - last_post < args.interval:
             continue
 
-        results = model.predict(frame, imgsz=args.image_size, conf=args.confidence, verbose=False)
+        results = model.predict(frame, imgsz=args.image_size, conf=args.confidence, classes=VEHICLE_CLASS_IDS, verbose=False)
         counts = {value: 0 for value in VEHICLE_LABELS.values()}
         confidence_scores = []
         for result in results:

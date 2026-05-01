@@ -39,7 +39,7 @@ AI_SIGNAL_STATE: dict[str, object] = {
     "last_update": 0,
     "signal": "ai",
     "green_seconds": 0,
-    "vehicle_counts": {"cars": 0, "buses": 0, "trucks": 0, "motorcycles": 0, "bicycles": 0, "total": 0},
+    "vehicle_counts": {"cars": 0, "buses": 0, "trucks": 0, "motorcycles": 0, "bicycles": 0, "trains": 0, "total": 0},
 }
 ESP32_WORKER: dict[str, object] = {
     "running": False,
@@ -1197,19 +1197,21 @@ def normalize_vehicle_counts(raw_counts: object, fallback_total: int = 0) -> dic
     trucks = max(0, int(counts.get("trucks", counts.get("truck", 0)) or 0))
     motorcycles = max(0, int(counts.get("motorcycles", counts.get("motorcycle", counts.get("bikes", 0))) or 0))
     bicycles = max(0, int(counts.get("bicycles", counts.get("bicycle", 0)) or 0))
-    total = max(fallback_total, cars + buses + trucks + motorcycles + bicycles)
+    trains = max(0, int(counts.get("trains", counts.get("train", 0)) or 0))
+    total = max(fallback_total, cars + buses + trucks + motorcycles + bicycles + trains)
     return {
         "cars": cars,
         "buses": buses,
         "trucks": trucks,
         "motorcycles": motorcycles,
         "bicycles": bicycles,
+        "trains": trains,
         "total": total,
     }
 
 
 def merge_vehicle_counts(lanes: list[dict]) -> dict:
-    total = {"cars": 0, "buses": 0, "trucks": 0, "motorcycles": 0, "bicycles": 0, "total": 0}
+    total = {"cars": 0, "buses": 0, "trucks": 0, "motorcycles": 0, "bicycles": 0, "trains": 0, "total": 0}
     for lane in lanes:
         counts = normalize_vehicle_counts(lane.get("vehicle_counts", {}), int(lane.get("vehicle_count", 0)))
         for key in total:

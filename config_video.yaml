@@ -1,0 +1,19 @@
+# Example config for testing with a local traffic video
+webhook_url: null
+ai_api_url: 'https://traffic-control-os.onrender.com'
+ai_token: 'dev-traffic-node'
+dashboard_lane: 'Eastbound camera'
+dashboard_location: 'Video test feed'
+model: 'models\\yolov8n.pt'
+source: 'C:\\Users\\mohni\\Videos\\traffic_sample.mp4.mp4'
+detection_conf: 0.35
+post_interval: 5
+count_window_s: 60
+max_vehicles_for_density: 20
+
+# Lanes for QVGA 320x240 video; adjust if your video resolution differs
+lanes:
+  - name: lane_1
+    rect: [0, 0, 320, 120]
+  - name: lane_2
+    rect: [0, 120, 320, 240]
