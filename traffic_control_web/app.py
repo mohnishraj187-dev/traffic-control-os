@@ -5,6 +5,8 @@ import json
 import os
 import secrets
 import sqlite3
+import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -29,9 +31,27 @@ ADMIN_EMAILS = {
     if email.strip()
 }
 APP_BASE_URL = os.environ.get("APP_BASE_URL", f"http://{HOST}:{PORT}")
+IOT_NODE_TOKEN = os.environ.get("IOT_NODE_TOKEN", "dev-traffic-node")
 
 SESSIONS: dict[str, dict] = {}
 CAMERA_FEED: dict[str, dict] = {}
+AI_SIGNAL_STATE: dict[str, object] = {
+    "last_update": 0,
+    "signal": "ai",
+    "green_seconds": 0,
+    "vehicle_counts": {"cars": 0, "buses": 0, "trucks": 0, "motorcycles": 0, "bicycles": 0, "total": 0},
+}
+ESP32_WORKER: dict[str, object] = {
+    "running": False,
+    "stop_event": None,
+    "thread": None,
+    "stream_url": "",
+    "lane": "",
+    "status": "Auto count is off.",
+    "last_count": 0,
+    "last_density": 0,
+    "updated_at": 0,
+}
 
 
 def init_db() -> None:
@@ -184,6 +204,14 @@ def is_admin_user(user: dict | None) -> bool:
 
 def admin_email_list() -> str:
     return ", ".join(sorted(ADMIN_EMAILS))
+
+
+def safe_print(message: str) -> None:
+    try:
+        if sys.stdout:
+            print(message)
+    except OSError:
+        pass
 
 
 def page_login() -> bytes:
@@ -723,31 +751,27 @@ def page_admin(user: dict | None) -> bytes:
   </section>
   <section id="ai" class="border-y border-slate-200 bg-slate-50 p-6">
     <div class="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
-      <div><h2 class="headline text-lg font-semibold">AI Camera Traffic Control</h2><p class="text-sm text-slate-500">Use a live camera feed to detect vehicles and calculate lane density.</p></div>
+      <div><h2 class="headline text-lg font-semibold">AI Traffic Signal Control</h2><p class="text-sm text-slate-500">External AI model updates vehicle counts, density, and signal timing in real time.</p></div>
       <div class="flex gap-2"><button id="refreshAiBtn" class="rounded-lg border bg-white px-4 py-2 text-sm font-bold">Refresh AI</button><button id="applyAiBtn" class="rounded-lg bg-slate-950 px-4 py-2 text-sm font-bold text-white">Apply AI Signal</button></div>
     </div>
-    <div class="mb-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-      <article class="rounded-lg border bg-white p-4">
-        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div><h3 class="font-bold">Live Camera Detector</h3><p class="text-xs text-slate-500">Point this device camera at a road or traffic video.</p></div>
-          <div class="flex flex-wrap gap-2">
-            <select id="cameraLane" class="rounded-lg border-slate-200 text-sm"><option>Northbound camera</option><option>Southbound camera</option><option>Eastbound camera</option><option>Westbound camera</option></select>
-            <button id="startVehicleCameraBtn" class="rounded-lg bg-slate-950 px-3 py-2 text-sm font-bold text-white">Start Camera</button>
-            <button id="stopVehicleCameraBtn" class="rounded-lg border bg-white px-3 py-2 text-sm font-bold">Stop</button>
-          </div>
-        </div>
-        <div class="relative overflow-hidden rounded-lg bg-slate-950">
-          <video id="vehicleVideo" class="h-72 w-full object-cover" playsinline muted></video>
-          <canvas id="vehicleCanvas" class="absolute inset-0 h-full w-full"></canvas>
-        </div>
-      </article>
-      <article class="rounded-lg border bg-white p-4">
-        <p class="text-xs font-bold uppercase text-slate-400">Real Camera Feed</p>
-        <p id="vehicleCount" class="mt-2 font-mono text-3xl font-bold">0 vehicles</p>
-        <p id="vehicleDensity" class="mt-2 text-sm text-slate-600">Density: 0%</p>
-        <p id="vehicleCameraStatus" class="mt-3 text-sm text-slate-500">Camera is off. Start it to send real density data.</p>
-      </article>
+    <div class="mb-4 grid gap-4 lg:grid-cols-4">
+      <article class="rounded-lg border bg-white p-4"><p class="text-xs font-bold uppercase text-slate-400">Cars</p><p id="aiCars" class="mt-2 font-mono text-3xl font-bold">0</p></article>
+      <article class="rounded-lg border bg-white p-4"><p class="text-xs font-bold uppercase text-slate-400">Buses</p><p id="aiBuses" class="mt-2 font-mono text-3xl font-bold">0</p></article>
+      <article class="rounded-lg border bg-white p-4"><p class="text-xs font-bold uppercase text-slate-400">Trucks</p><p id="aiTrucks" class="mt-2 font-mono text-3xl font-bold">0</p></article>
+      <article class="rounded-lg border bg-white p-4"><p class="text-xs font-bold uppercase text-slate-400">Two Wheelers</p><p id="aiMotorcycles" class="mt-2 font-mono text-3xl font-bold">0</p></article>
     </div>
+    <article class="mb-4 rounded-lg border bg-white p-4">
+      <div class="mb-3 flex flex-col justify-between gap-3 md:flex-row md:items-center">
+        <div><h3 class="font-bold">Traffic Signal Details</h3><p class="text-xs text-slate-500">Live signal timing and density received from the separate AI model.</p></div>
+        <span class="rounded bg-slate-100 px-2 py-1 font-mono text-xs">/api/ai-traffic-update</span>
+      </div>
+      <div class="grid gap-3 md:grid-cols-4">
+        <div class="rounded border bg-slate-50 p-3"><p class="text-xs font-bold uppercase text-slate-400">AI Signal</p><p id="signalDetailSignal" class="mt-1 font-mono text-xl font-bold">AI</p></div>
+        <div class="rounded border bg-slate-50 p-3"><p class="text-xs font-bold uppercase text-slate-400">Green Time</p><p id="signalDetailGreen" class="mt-1 font-mono text-xl font-bold">0s</p></div>
+        <div class="rounded border bg-slate-50 p-3"><p class="text-xs font-bold uppercase text-slate-400">Density</p><p id="signalDetailDensity" class="mt-1 font-mono text-xl font-bold">0%</p></div>
+        <div class="rounded border bg-slate-50 p-3"><p class="text-xs font-bold uppercase text-slate-400">Total Vehicles</p><p id="signalDetailTotal" class="mt-1 font-mono text-xl font-bold">0</p></div>
+      </div>
+    </article>
     <div class="grid gap-4 lg:grid-cols-3">
       <article class="rounded-lg border bg-white p-4">
         <p class="text-xs font-bold uppercase text-slate-400">Recommended Signal</p>
@@ -762,7 +786,7 @@ def page_admin(user: dict | None) -> bytes:
       <article class="rounded-lg border bg-white p-4">
         <p class="text-xs font-bold uppercase text-slate-400">Priority Lane</p>
         <p id="aiLane" class="mt-2 text-xl font-bold">-</p>
-        <p id="aiStatus" class="mt-2 text-sm text-slate-600">Waiting for real camera feed.</p>
+        <p id="aiStatus" class="mt-2 text-sm text-slate-600">Waiting for AI model data.</p>
       </article>
     </div>
     <div id="aiLanes" class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4"></div>
@@ -773,16 +797,9 @@ def page_admin(user: dict | None) -> bytes:
   </section>
 </main>
 <nav class="fixed bottom-0 left-0 right-0 z-50 flex justify-around border-t bg-white px-4 py-3 md:hidden"><a class="text-xs font-bold" href="#map">Map</a><a class="text-xs font-bold" href="#control">Control</a><a class="text-xs font-bold" href="#ai">AI</a><a class="text-xs font-bold" href="#accidents">Accidents</a></nav>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <script>
 async function postJson(url, payload) {{ const res = await fetch(url, {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload) }}); return res.json(); }}
 let selectedControlPlace = {{ label: 'Silk Board Junction', placeLocation: '12.9177, 77.6238' }};
-let vehicleModel = null;
-let vehicleStream = null;
-let vehicleLoopRunning = false;
-let lastCameraPost = 0;
-const vehicleClasses = new Set(['car', 'bus', 'truck', 'motorcycle', 'bicycle']);
 function selectControlPlace(label, placeLocation, jumpToControl = true) {{
   selectedControlPlace = {{ label: label || 'Selected traffic node', placeLocation: placeLocation || 'Unknown location' }};
   document.getElementById('currentNodeLabel').textContent = selectedControlPlace.label;
@@ -826,12 +843,21 @@ function renderReports(reports) {{
   document.querySelectorAll('#reports .control-place-btn').forEach(btn => btn.onclick = () => selectControlPlace(btn.dataset.label, btn.dataset.location));
 }}
 function renderAiTraffic(ai) {{
+  const counts = ai.vehicle_counts || {{}};
   document.getElementById('aiSignal').textContent = ai.recommended_signal.toUpperCase();
   document.getElementById('aiReason').textContent = ai.reason;
   document.getElementById('aiConfidence').textContent = `${{ai.confidence}}%`;
   document.getElementById('aiCycle').textContent = `Green window: ${{ai.green_seconds}} seconds`;
   document.getElementById('aiLane').textContent = ai.priority_lane;
   document.getElementById('aiStatus').textContent = `Updated ${{ai.updated_at}}`;
+  document.getElementById('aiCars').textContent = counts.cars || 0;
+  document.getElementById('aiBuses').textContent = counts.buses || 0;
+  document.getElementById('aiTrucks').textContent = counts.trucks || 0;
+  document.getElementById('aiMotorcycles').textContent = counts.motorcycles || 0;
+  document.getElementById('signalDetailSignal').textContent = ai.recommended_signal.toUpperCase();
+  document.getElementById('signalDetailGreen').textContent = `${{ai.green_seconds}}s`;
+  document.getElementById('signalDetailDensity').textContent = `${{ai.average_density}}%`;
+  document.getElementById('signalDetailTotal').textContent = counts.total || ai.lanes.reduce((sum, lane) => sum + lane.vehicle_count, 0);
   document.getElementById('aiLanes').innerHTML = ai.lanes.map(lane => `
     <article class="rounded-lg border bg-white p-4">
       <div class="mb-2 flex items-center justify-between gap-2">
@@ -839,79 +865,9 @@ function renderAiTraffic(ai) {{
         <span class="rounded bg-slate-100 px-2 py-1 font-mono text-xs">${{lane.density}}%</span>
       </div>
       <div class="h-2 overflow-hidden rounded bg-slate-100"><div class="h-full rounded bg-[#fd761a]" style="width: ${{lane.density}}%"></div></div>
-      <p class="mt-2 text-xs text-slate-500">${{lane.vehicle_count}} vehicles estimated from camera feed</p>
+      <p class="mt-2 text-xs text-slate-500">${{lane.vehicle_count}} vehicles - ${{lane.source || 'ai model'}}</p>
     </article>`).join('');
 }}
-async function loadVehicleModel() {{
-  if (vehicleModel) return vehicleModel;
-  document.getElementById('vehicleCameraStatus').textContent = 'Loading vehicle detection model...';
-  vehicleModel = await cocoSsd.load();
-  document.getElementById('vehicleCameraStatus').textContent = 'Vehicle model loaded. Starting detection...';
-  return vehicleModel;
-}}
-function drawDetections(predictions) {{
-  const video = document.getElementById('vehicleVideo');
-  const canvas = document.getElementById('vehicleCanvas');
-  const context = canvas.getContext('2d');
-  canvas.width = video.videoWidth || video.clientWidth;
-  canvas.height = video.videoHeight || video.clientHeight;
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = '#fd761a';
-  context.lineWidth = 3;
-  context.font = '16px Inter, sans-serif';
-  predictions.forEach(item => {{
-    const [x, y, width, height] = item.bbox;
-    context.strokeRect(x, y, width, height);
-    context.fillStyle = '#fd761a';
-    context.fillText(`${{item.class}} ${{Math.round(item.score * 100)}}%`, x, Math.max(18, y - 5));
-  }});
-}}
-async function postCameraDensity(vehicleCount, density, confidence) {{
-  const now = Date.now();
-  if (now - lastCameraPost < 1800) return;
-  lastCameraPost = now;
-  await postJson('/api/camera-density', {{
-    lane: document.getElementById('cameraLane').value,
-    vehicle_count: vehicleCount,
-    density,
-    confidence
-  }});
-}}
-async function detectVehicleFrame() {{
-  if (!vehicleLoopRunning || !vehicleModel) return;
-  const video = document.getElementById('vehicleVideo');
-  if (video.readyState >= 2) {{
-    const predictions = await vehicleModel.detect(video);
-    const vehicles = predictions.filter(item => vehicleClasses.has(item.class) && item.score >= 0.45);
-    const density = Math.min(100, Math.round(vehicles.length * 14));
-    const confidence = vehicles.length ? Math.round(vehicles.reduce((sum, item) => sum + item.score, 0) / vehicles.length * 100) : 70;
-    drawDetections(vehicles);
-    document.getElementById('vehicleCount').textContent = `${{vehicles.length}} vehicles`;
-    document.getElementById('vehicleDensity').textContent = `Density: ${{density}}%`;
-    document.getElementById('vehicleCameraStatus').textContent = `Sending real camera data for ${{document.getElementById('cameraLane').value}}`;
-    await postCameraDensity(vehicles.length, density, confidence);
-  }}
-  requestAnimationFrame(detectVehicleFrame);
-}}
-document.getElementById('startVehicleCameraBtn').onclick = async () => {{
-  try {{
-    const video = document.getElementById('vehicleVideo');
-    await loadVehicleModel();
-    vehicleStream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode: {{ ideal: 'environment' }} }}, audio: false }});
-    video.srcObject = vehicleStream;
-    await video.play();
-    vehicleLoopRunning = true;
-    detectVehicleFrame();
-  }} catch (error) {{
-    document.getElementById('vehicleCameraStatus').textContent = 'Camera/model could not start. Allow camera permission and reload if needed.';
-  }}
-}};
-document.getElementById('stopVehicleCameraBtn').onclick = () => {{
-  vehicleLoopRunning = false;
-  if (vehicleStream) vehicleStream.getTracks().forEach(track => track.stop());
-  vehicleStream = null;
-  document.getElementById('vehicleCameraStatus').textContent = 'Camera stopped.';
-}};
 async function refresh() {{
   const data = await (await fetch('/api/admin-state')).json();
   document.getElementById('qrCount').textContent = data.total_scans;
@@ -1061,19 +1017,41 @@ class TrafficHandler(BaseHTTPRequestHandler):
                 if not is_admin_user(user):
                     self.json_response({"ok": False, "error": "Admin access required"}, 403)
                     return
-                payload = self.read_json()
-                lane = payload.get("lane", "Eastbound camera")
-                density = max(0, min(100, int(payload.get("density", 0))))
-                vehicle_count = max(0, int(payload.get("vehicle_count", 0)))
-                confidence = max(0, min(100, int(payload.get("confidence", 70))))
-                CAMERA_FEED[lane] = {
-                    "name": lane,
-                    "density": density,
-                    "vehicle_count": vehicle_count,
-                    "confidence": confidence,
-                    "updated_at": int(time.time()),
-                }
+                update_camera_feed(self.read_json(), source="browser-camera")
                 self.json_response({"ok": True, "traffic_ai": traffic_ai_state()})
+            elif parsed.path == "/api/iot/camera-density":
+                payload = self.read_json()
+                token = payload.get("token", "")
+                auth_header = self.headers.get("Authorization", "")
+                bearer = auth_header.removeprefix("Bearer ").strip()
+                if token != IOT_NODE_TOKEN and bearer != IOT_NODE_TOKEN:
+                    self.json_response({"ok": False, "error": "Invalid IoT node token"}, 403)
+                    return
+                update_camera_feed(payload, source="esp32-cam-node")
+                self.json_response({"ok": True, "traffic_ai": traffic_ai_state()})
+            elif parsed.path == "/api/ai-traffic-update":
+                payload = self.read_json()
+                token = payload.get("token", "")
+                auth_header = self.headers.get("Authorization", "")
+                bearer = auth_header.removeprefix("Bearer ").strip()
+                if token != IOT_NODE_TOKEN and bearer != IOT_NODE_TOKEN:
+                    self.json_response({"ok": False, "error": "Invalid AI model token"}, 403)
+                    return
+                ai = update_ai_model_feed(payload)
+                self.json_response({"ok": True, "traffic_ai": ai})
+            elif parsed.path == "/api/esp32-worker/start":
+                if not is_admin_user(user):
+                    self.json_response({"ok": False, "error": "Admin access required"}, 403)
+                    return
+                payload = self.read_json()
+                result = start_esp32_worker(payload.get("stream_url", ""), payload.get("lane", "Eastbound camera"))
+                self.json_response(result, 200 if result.get("ok") else 400)
+            elif parsed.path == "/api/esp32-worker/stop":
+                if not is_admin_user(user):
+                    self.json_response({"ok": False, "error": "Admin access required"}, 403)
+                    return
+                stop_esp32_worker()
+                self.json_response({"ok": True, "esp32_worker": esp32_worker_state()})
             else:
                 self.json_response({"ok": False, "error": "Not found"}, 404)
         except Exception as exc:
@@ -1191,7 +1169,293 @@ class TrafficHandler(BaseHTTPRequestHandler):
         self.send_bytes(target.read_bytes(), 200, mime)
 
     def log_message(self, fmt: str, *args) -> None:
-        print(f"{self.address_string()} - {fmt % args}")
+        safe_print(f"{self.address_string()} - {fmt % args}")
+
+
+def update_camera_feed(payload: dict, source: str) -> None:
+    lane = payload.get("lane", "Eastbound camera")
+    density = max(0, min(100, int(payload.get("density", 0))))
+    vehicle_count = max(0, int(payload.get("vehicle_count", 0)))
+    confidence = max(0, min(100, int(payload.get("confidence", 70))))
+    vehicle_counts = normalize_vehicle_counts(payload.get("vehicle_counts", {}), vehicle_count)
+    CAMERA_FEED[lane] = {
+        "name": lane,
+        "density": density,
+        "vehicle_count": vehicle_count,
+        "vehicle_counts": vehicle_counts,
+        "confidence": confidence,
+        "source": payload.get("source", source),
+        "camera_url": payload.get("camera_url", ""),
+        "updated_at": int(time.time()),
+    }
+
+
+def normalize_vehicle_counts(raw_counts: object, fallback_total: int = 0) -> dict:
+    counts = raw_counts if isinstance(raw_counts, dict) else {}
+    cars = max(0, int(counts.get("cars", counts.get("car", 0)) or 0))
+    buses = max(0, int(counts.get("buses", counts.get("bus", 0)) or 0))
+    trucks = max(0, int(counts.get("trucks", counts.get("truck", 0)) or 0))
+    motorcycles = max(0, int(counts.get("motorcycles", counts.get("motorcycle", counts.get("bikes", 0))) or 0))
+    bicycles = max(0, int(counts.get("bicycles", counts.get("bicycle", 0)) or 0))
+    total = max(fallback_total, cars + buses + trucks + motorcycles + bicycles)
+    return {
+        "cars": cars,
+        "buses": buses,
+        "trucks": trucks,
+        "motorcycles": motorcycles,
+        "bicycles": bicycles,
+        "total": total,
+    }
+
+
+def merge_vehicle_counts(lanes: list[dict]) -> dict:
+    total = {"cars": 0, "buses": 0, "trucks": 0, "motorcycles": 0, "bicycles": 0, "total": 0}
+    for lane in lanes:
+        counts = normalize_vehicle_counts(lane.get("vehicle_counts", {}), int(lane.get("vehicle_count", 0)))
+        for key in total:
+            total[key] += counts[key]
+    return total
+
+
+def signal_for_density(density: int, average_density: int) -> str:
+    if density >= 65:
+        return "go"
+    if average_density >= 35:
+        return "slow"
+    return "ai"
+
+
+def update_ai_model_feed(payload: dict) -> dict:
+    lane = payload.get("lane", "Eastbound camera")
+    vehicle_counts = normalize_vehicle_counts(payload.get("vehicle_counts", {}), int(payload.get("vehicle_count", 0) or 0))
+    vehicle_count = int(payload.get("vehicle_count", vehicle_counts["total"]) or vehicle_counts["total"])
+    density = max(0, min(100, int(payload.get("density", min(100, vehicle_count * 8)) or 0)))
+    confidence = max(0, min(100, int(payload.get("confidence", 80) or 80)))
+    recommended_signal = payload.get("recommended_signal") or signal_for_density(density, density)
+    green_seconds = max(15, min(120, int(payload.get("green_seconds", 20 + density) or 20 + density)))
+
+    update_camera_feed(
+        {
+            "lane": lane,
+            "vehicle_count": vehicle_count,
+            "vehicle_counts": vehicle_counts,
+            "density": density,
+            "confidence": confidence,
+            "source": payload.get("source", "separate-ai-model"),
+        },
+        source="separate-ai-model",
+    )
+    AI_SIGNAL_STATE.update(
+        {
+            "last_update": int(time.time()),
+            "signal": recommended_signal,
+            "green_seconds": green_seconds,
+            "vehicle_counts": vehicle_counts,
+        }
+    )
+    db_execute(
+        "UPDATE signal_state SET signal = ?, priority_pass = ?, target_label = ?, target_location = ?, updated_at = ? WHERE id = 1",
+        (
+            recommended_signal,
+            1 if density >= 75 else 0,
+            payload.get("target_label", lane),
+            payload.get("target_location", "AI model traffic node"),
+            int(time.time()),
+        ),
+    )
+    return traffic_ai_state()
+
+
+def esp32_worker_state() -> dict:
+    return {
+        "running": bool(ESP32_WORKER.get("running")),
+        "stream_url": ESP32_WORKER.get("stream_url", ""),
+        "lane": ESP32_WORKER.get("lane", ""),
+        "status": ESP32_WORKER.get("status", "Auto count is off."),
+        "last_count": int(ESP32_WORKER.get("last_count", 0) or 0),
+        "last_density": int(ESP32_WORKER.get("last_density", 0) or 0),
+        "updated_at": ESP32_WORKER.get("updated_at", 0),
+    }
+
+
+def stop_esp32_worker() -> None:
+    stop_event = ESP32_WORKER.get("stop_event")
+    if stop_event:
+        stop_event.set()
+    ESP32_WORKER["running"] = False
+    ESP32_WORKER["status"] = "Auto count is off."
+    ESP32_WORKER["updated_at"] = int(time.time())
+
+
+def start_esp32_worker(stream_url: str, lane: str) -> dict:
+    stream_url = stream_url.strip()
+    lane = lane.strip() or "Eastbound camera"
+    if not stream_url:
+        return {"ok": False, "error": "ESP32-CAM stream URL is required."}
+    try:
+        import cv2  # type: ignore
+    except ImportError:
+        return {"ok": False, "error": "OpenCV is missing. Run: python -m pip install opencv-python"}
+
+    stop_esp32_worker()
+    stop_event = threading.Event()
+    ESP32_WORKER.update(
+        {
+            "running": True,
+            "stop_event": stop_event,
+            "stream_url": stream_url,
+            "lane": lane,
+            "status": "Auto count starting...",
+            "last_count": 0,
+            "last_density": 0,
+            "updated_at": int(time.time()),
+        }
+    )
+    thread = threading.Thread(target=esp32_worker_loop, args=(cv2, stream_url, lane, stop_event), daemon=True)
+    ESP32_WORKER["thread"] = thread
+    thread.start()
+    return {"ok": True, "esp32_worker": esp32_worker_state()}
+
+
+def set_esp32_worker_status(status: str, *, running: bool | None = None) -> None:
+    ESP32_WORKER["status"] = status
+    ESP32_WORKER["updated_at"] = int(time.time())
+    if running is not None:
+        ESP32_WORKER["running"] = running
+
+
+def open_esp32_capture(cv2, stream_url: str):
+    backend = getattr(cv2, "CAP_FFMPEG", 0)
+    timeout_props = []
+    open_timeout = getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None)
+    read_timeout = getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None)
+    if open_timeout is not None:
+        timeout_props.extend([open_timeout, 5000])
+    if read_timeout is not None:
+        timeout_props.extend([read_timeout, 5000])
+    try:
+        if timeout_props:
+            return cv2.VideoCapture(stream_url, backend, timeout_props)
+    except Exception:
+        pass
+    return cv2.VideoCapture(stream_url, backend)
+
+
+def esp32_worker_loop(cv2, stream_url: str, lane: str, stop_event: threading.Event) -> None:
+    capture = None
+    background = None
+    calibration_motion: list[float] = []
+    motion_floor = 0.0
+    try:
+        set_esp32_worker_status(f"Connecting to ESP32-CAM stream for {lane}...")
+        capture = open_esp32_capture(cv2, stream_url)
+        if not capture.isOpened():
+            set_esp32_worker_status("Auto count could not open the ESP32-CAM stream. Check that this PC can reach the URL.", running=False)
+            return
+
+        set_esp32_worker_status(f"Auto count connected. Calibrating motion for {lane}...")
+        last_update = 0.0
+        while not stop_event.is_set():
+            ok, frame = capture.read()
+            if not ok:
+                set_esp32_worker_status("Auto count lost stream. Reconnecting...")
+                capture.release()
+                time.sleep(1)
+                capture = open_esp32_capture(cv2, stream_url)
+                background = None
+                calibration_motion = []
+                motion_floor = 0.0
+                continue
+
+            frame = cv2.resize(frame, (640, 360))
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (21, 21), 0)
+            if background is None:
+                background = gray
+                update_camera_feed(
+                    {
+                        "lane": lane,
+                        "vehicle_count": 0,
+                        "density": 0,
+                        "confidence": 60,
+                        "camera_url": stream_url,
+                    },
+                    source="esp32-auto-count",
+                )
+                ESP32_WORKER["last_count"] = 0
+                ESP32_WORKER["last_density"] = 0
+                set_esp32_worker_status(f"Auto count is receiving frames for {lane}. Waiting for motion...")
+                continue
+
+            delta = cv2.absdiff(background, gray)
+            threshold = cv2.threshold(delta, 32, 255, cv2.THRESH_BINARY)[1]
+            threshold = cv2.dilate(threshold, None, iterations=2)
+            contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            moving_regions = []
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area < 1200:
+                    continue
+                x, y, width, height = cv2.boundingRect(contour)
+                if width < 35 or height < 20:
+                    continue
+                moving_regions.append(contour)
+
+            total_motion_area = sum(cv2.contourArea(contour) for contour in moving_regions)
+            if len(calibration_motion) < 12:
+                calibration_motion.append(total_motion_area)
+                motion_floor = sorted(calibration_motion)[len(calibration_motion) // 2]
+                if time.time() - last_update >= 1.5:
+                    update_camera_feed(
+                        {
+                            "lane": lane,
+                            "vehicle_count": 0,
+                            "density": 0,
+                            "confidence": 60,
+                            "camera_url": stream_url,
+                        },
+                        source="esp32-auto-count",
+                    )
+                    ESP32_WORKER["last_count"] = 0
+                    ESP32_WORKER["last_density"] = 0
+                    set_esp32_worker_status(f"Auto count calibrating empty-frame noise for {lane}...")
+                    last_update = time.time()
+                background = cv2.addWeighted(background, 0.95, gray, 0.05, 0)
+                continue
+
+            active_motion_area = max(0.0, total_motion_area - motion_floor)
+            if active_motion_area < 7000 or len(moving_regions) == 0:
+                vehicle_count = 0
+            else:
+                area_estimate = round(active_motion_area / 12000)
+                vehicle_count = min(12, max(len(moving_regions), area_estimate))
+            density = min(100, round(vehicle_count / 12 * 100))
+            confidence = 65 if vehicle_count == 0 else min(92, 70 + vehicle_count * 2)
+
+            if time.time() - last_update >= 1.5:
+                update_camera_feed(
+                    {
+                        "lane": lane,
+                        "vehicle_count": vehicle_count,
+                        "density": density,
+                        "confidence": confidence,
+                        "camera_url": stream_url,
+                    },
+                    source="esp32-auto-count",
+                )
+                ESP32_WORKER["last_count"] = vehicle_count
+                ESP32_WORKER["last_density"] = density
+                set_esp32_worker_status(f"Auto count live: {vehicle_count} vehicles, {density}% density.")
+                last_update = time.time()
+
+            background = cv2.addWeighted(background, 0.92, gray, 0.08, 0)
+    except Exception as exc:
+        set_esp32_worker_status(f"Auto count error: {exc}", running=False)
+    finally:
+        if capture:
+            capture.release()
+        if not stop_event.is_set() and ESP32_WORKER.get("running"):
+            ESP32_WORKER["running"] = False
 
 
 def admin_state() -> dict:
@@ -1201,7 +1465,14 @@ def admin_state() -> dict:
     reports = db_rows("SELECT * FROM accident_reports ORDER BY id DESC LIMIT 30")
     for report in reports:
         report["image_url"] = f"/uploads/{report['image_filename']}" if report.get("image_filename") else ""
-    return {"signal": signal, "total_scans": total_scans, "latest_scans": latest_scans, "reports": reports, "traffic_ai": traffic_ai_state()}
+    return {
+        "signal": signal,
+        "total_scans": total_scans,
+        "latest_scans": latest_scans,
+        "reports": reports,
+        "traffic_ai": traffic_ai_state(),
+        "esp32_worker": esp32_worker_state(),
+    }
 
 
 def traffic_ai_state() -> dict:
@@ -1218,25 +1489,29 @@ def traffic_ai_state() -> dict:
                         "name": lane_name,
                         "density": int(feed.get("density", 0)),
                         "vehicle_count": int(feed.get("vehicle_count", 0)),
+                        "vehicle_counts": normalize_vehicle_counts(feed.get("vehicle_counts", {}), int(feed.get("vehicle_count", 0))),
+                        "source": feed.get("source", "camera-node"),
                     }
                 )
             else:
-                camera_lanes.append({"name": lane_name, "density": 0, "vehicle_count": 0})
+                camera_lanes.append({"name": lane_name, "density": 0, "vehicle_count": 0, "vehicle_counts": normalize_vehicle_counts({}, 0), "source": "idle"})
         priority = max(camera_lanes, key=lambda lane: lane["density"])
         avg_density = round(sum(lane["density"] for lane in camera_lanes) / len(camera_lanes))
         confidence = max(int(feed.get("confidence", 70)) for feed in live_lanes)
-        recommended_signal = "go" if priority["density"] >= 35 else "slow" if avg_density >= 15 else "ai"
-        green_seconds = min(95, max(20, 20 + priority["density"]))
+        recommended_signal = str(AI_SIGNAL_STATE.get("signal") or signal_for_density(priority["density"], avg_density))
+        green_seconds = int(AI_SIGNAL_STATE.get("green_seconds") or min(95, max(20, 20 + priority["density"])))
+        vehicle_counts = merge_vehicle_counts(camera_lanes)
         return {
-            "mode": "live_camera",
+            "mode": "separate_ai_model",
             "lanes": camera_lanes,
+            "vehicle_counts": vehicle_counts,
             "priority_lane": priority["name"],
             "average_density": avg_density,
             "recommended_signal": recommended_signal,
             "green_seconds": green_seconds,
             "confidence": confidence,
             "emergency_priority": priority["density"] >= 75,
-            "reason": f"Live camera detected {priority['vehicle_count']} vehicles on {priority['name']} with {priority['density']}% density.",
+            "reason": f"AI model counted {vehicle_counts['total']} vehicles. {priority['name']} is highest at {priority['density']}% density.",
             "updated_at": time.strftime("%H:%M:%S", time.localtime(max(feed["updated_at"] for feed in live_lanes))),
         }
 
@@ -1254,7 +1529,7 @@ def traffic_ai_state() -> dict:
         wave = ((minute_bucket + index * 3) % 11) * 4
         density = min(96, lane["base"] + wave + scan_count * 3 + report_count * 5)
         vehicle_count = max(3, round(density * 0.7 + index * 2))
-        camera_lanes.append({"name": lane["name"], "density": density, "vehicle_count": vehicle_count})
+        camera_lanes.append({"name": lane["name"], "density": density, "vehicle_count": vehicle_count, "vehicle_counts": normalize_vehicle_counts({"cars": vehicle_count}, vehicle_count), "source": "simulation"})
 
     priority = max(camera_lanes, key=lambda lane: lane["density"])
     avg_density = round(sum(lane["density"] for lane in camera_lanes) / len(camera_lanes))
@@ -1268,6 +1543,7 @@ def traffic_ai_state() -> dict:
     return {
         "mode": "simulation",
         "lanes": camera_lanes,
+        "vehicle_counts": merge_vehicle_counts(camera_lanes),
         "priority_lane": priority["name"],
         "average_density": avg_density,
         "recommended_signal": recommended_signal,
@@ -1673,8 +1949,8 @@ def traffic_summary(query: dict[str, list[str]] | None = None) -> dict:
 def main() -> None:
     init_db()
     server = ThreadingHTTPServer((HOST, PORT), TrafficHandler)
-    print(f"TrafficControl OS running at http://{HOST}:{PORT}")
-    print("Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET for real Google sign-in.")
+    safe_print(f"TrafficControl OS running at http://{HOST}:{PORT}")
+    safe_print("Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET for real Google sign-in.")
     server.serve_forever()
 
 

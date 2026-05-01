@@ -76,13 +76,49 @@ The route API is exposed at `/api/route` and accepts `origin_lat`, `origin_lng`,
 - Admin QR and accident cards show where the request came from and include a Control button that selects that place before manual signal override.
 - Admin manual buttons post to `/api/signal`; the page updates the current signal state.
 - Admin control toggles post to `/api/control-toggle`.
-- Admin AI camera control can use the browser camera with TensorFlow.js COCO-SSD vehicle detection to estimate real lane density.
-- If no live camera feed is active, the admin AI panel falls back to simulated lane density for demos.
+- Admin AI control receives updates from a separate AI model process through `/api/ai-traffic-update`.
+- If no AI model feed is active, the admin AI panel falls back to simulated lane density for demos.
 - Admin "Apply AI Signal" posts to `/api/ai-apply`, which applies the current AI recommendation to the live signal state.
 
-## Camera AI Roadmap
+## Separate AI Model
 
-The admin dashboard now includes a real browser-camera prototype. Click "Start Camera" in the AI section, allow camera permission, choose the lane direction, and point the camera at a road or traffic video. The browser detects vehicles and posts density to `/api/camera-density`.
+The admin dashboard does not run camera detection in the browser. Run the AI model separately and let it send vehicle counts, density, and signal timing to the web backend:
+
+```powershell
+python -m pip install opencv-python ultralytics
+python traffic_control_web\tools\traffic_ai_model.py --source "http://192.168.1.45:81/stream" --api-url "http://127.0.0.1:5000" --token "dev-traffic-node" --lane "Eastbound camera"
+```
+
+The AI model posts to `/api/ai-traffic-update` with counts for cars, buses, trucks, motorcycles, and bicycles. The admin portal then shows the latest counts, traffic density, green time, and recommended signal.
+
+## ESP32-CAM Field Node
+
+This project can now use one ESP32-CAM as a real low-cost junction node while the other lanes remain simulated.
+
+1. Open `esp32_cam_node/ESP32CamTrafficNode.ino` in Arduino IDE.
+2. Select board `AI Thinker ESP32-CAM`.
+3. Edit `WIFI_SSID` and `WIFI_PASSWORD`.
+4. Upload the sketch, then open Serial Monitor at `115200`.
+5. Copy the printed stream URL, usually like:
+
+```text
+http://192.168.1.45:81/stream
+```
+
+6. Start the web app:
+
+```powershell
+$env:IOT_NODE_TOKEN="dev-traffic-node"
+python traffic_control_web\app.py
+```
+
+7. Run the separate AI model against the printed stream URL:
+
+```powershell
+python traffic_control_web\tools\traffic_ai_model.py --source "http://192.168.1.45:81/stream" --token "dev-traffic-node" --lane "Eastbound camera"
+```
+
+The AI model reads the ESP32-CAM stream, counts vehicle classes, calculates density, and posts the live signal recommendation to `/api/ai-traffic-update`. For an SIH demo, present this as one deployed field node plus an area-level dashboard with three simulated neighboring junctions.
 
 For a production city system:
 
