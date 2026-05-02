@@ -82,7 +82,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS signal_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 signal TEXT NOT NULL,
-                lane_diversion INTEGER NOT NULL DEFAULT 1,
+                lane_diversion INTEGER NOT NULL DEFAULT 0,
                 priority_pass INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL
             );
@@ -101,7 +101,7 @@ def init_db() -> None:
                 created_at INTEGER NOT NULL
             );
             INSERT OR IGNORE INTO signal_state (id, signal, lane_diversion, priority_pass, updated_at)
-            VALUES (1, 'stop', 1, 0, strftime('%s', 'now'));
+            VALUES (1, 'stop', 0, 0, strftime('%s', 'now'));
             """
         )
         existing_columns = {row[1] for row in db.execute("PRAGMA table_info(signal_state)").fetchall()}
@@ -109,6 +109,16 @@ def init_db() -> None:
             db.execute("ALTER TABLE signal_state ADD COLUMN target_label TEXT DEFAULT 'Silk Board Junction'")
         if "target_location" not in existing_columns:
             db.execute("ALTER TABLE signal_state ADD COLUMN target_location TEXT DEFAULT '12.9177, 77.6238'")
+        db.execute(
+            """
+            UPDATE signal_state
+            SET lane_diversion = 0
+            WHERE id = 1
+              AND lane_diversion = 1
+              AND COALESCE(target_label, 'Silk Board Junction') = 'Silk Board Junction'
+              AND COALESCE(target_location, '12.9177, 77.6238') = '12.9177, 77.6238'
+            """
+        )
         db.commit()
 
 
@@ -357,10 +367,6 @@ def page_public(user: dict | None) -> bytes:
             <p id="fallbackLocation" class="font-mono text-slate-600">Waiting for location permission...</p>
           </div>
           <div class="absolute left-4 top-4 rounded-lg border bg-white/90 p-3 shadow-sm backdrop-blur"><p class="text-xs font-bold uppercase text-slate-500">Avg. Speed</p><p id="avgSpeed" class="font-mono text-lg font-bold">24.5 km/h</p><p id="speedTrend" class="text-xs text-red-500">12% from yesterday</p></div>
-          <div id="laneBlockAlert" class="pointer-events-none absolute inset-x-4 top-24 z-[450] hidden rounded-lg border border-red-200 bg-red-600/95 p-3 text-white shadow-sm backdrop-blur">
-            <p class="text-xs font-bold uppercase">Lane blocked by traffic control</p>
-            <p id="laneBlockText" class="mt-1 text-sm">Follow diversion near the active signal.</p>
-          </div>
           <div class="absolute bottom-4 right-4 flex flex-col gap-2">
             <button id="zoomInBtn" class="grid h-10 w-10 place-items-center rounded border bg-white shadow-sm"><span class="material-symbols-outlined">add</span></button>
             <button id="zoomOutBtn" class="grid h-10 w-10 place-items-center rounded border bg-white shadow-sm"><span class="material-symbols-outlined">remove</span></button>
@@ -415,7 +421,7 @@ let currentLocationMarker;
 let destinationMarker;
 let routeStartMarker;
 let blockedLaneMarker;
-let blockedLaneCircle;
+let blockedLaneLine;
 let usingTopoLayer = false;
 let routeIndex = 0;
 const routeFocus = [
@@ -449,9 +455,11 @@ function parseControlCoordinates(placeLocation) {{
   return [lat, lng];
 }}
 function clearBlockedLane() {{
-  document.getElementById('laneBlockAlert').classList.add('hidden');
   if (blockedLaneMarker) {{ blockedLaneMarker.remove(); blockedLaneMarker = null; }}
-  if (blockedLaneCircle) {{ blockedLaneCircle.remove(); blockedLaneCircle = null; }}
+  if (blockedLaneLine) {{ blockedLaneLine.remove(); blockedLaneLine = null; }}
+}}
+function blockedLaneSegment(coords) {{
+  return [[coords[0], coords[1] - 0.0012], [coords[0], coords[1] + 0.0012]];
 }}
 function renderBlockedLane(signal) {{
   if (!signal || !signal.lane_diversion) {{
@@ -460,14 +468,13 @@ function renderBlockedLane(signal) {{
   }}
   const label = signal.target_label || 'Traffic control zone';
   const location = signal.target_location || '';
-  document.getElementById('laneBlockAlert').classList.remove('hidden');
-  document.getElementById('laneBlockText').textContent = `${{label}} - lane diversion active`;
   const coords = parseControlCoordinates(location);
   if (!coords || !trafficMap) return;
-  if (!blockedLaneCircle) {{
-    blockedLaneCircle = L.circle(coords, {{ radius: 220, color: '#dc2626', weight: 3, fillColor: '#ef4444', fillOpacity: 0.2 }}).addTo(trafficMap);
+  const segment = blockedLaneSegment(coords);
+  if (!blockedLaneLine) {{
+    blockedLaneLine = L.polyline(segment, {{ color: '#dc2626', weight: 12, opacity: 0.9, lineCap: 'round' }}).addTo(trafficMap);
   }} else {{
-    blockedLaneCircle.setLatLng(coords);
+    blockedLaneLine.setLatLngs(segment);
   }}
   if (!blockedLaneMarker) {{
     blockedLaneMarker = L.marker(coords, {{
@@ -476,7 +483,7 @@ function renderBlockedLane(signal) {{
   }} else {{
     blockedLaneMarker.setLatLng(coords);
   }}
-  blockedLaneMarker.bindPopup(`${{label}}<br>Lane diversion active`);
+  blockedLaneMarker.bindPopup(`${{label}}<br>Lane blocked by traffic control`);
 }}
 async function refreshPublicSignal() {{
   try {{
@@ -582,7 +589,7 @@ async function optimizeBestRoute() {{
     }}, 80);
     setTimeout(() => trafficMap.invalidateSize(), 500);
     summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}} by road.`;
-    document.getElementById('mapSource').textContent = route.cached ? 'Road route from cache' : 'Road route from OSRM/OpenStreetMap';
+    document.getElementById('mapSource').textContent = route.blocked_lane_avoided ? 'Road route avoids blocked lane' : (route.cached ? 'Road route from cache' : 'Road route from OSRM/OpenStreetMap');
   }} catch (error) {{
     summary.textContent = 'Allow location permission and check the destination spelling so the route can be calculated.';
   }}
@@ -1953,8 +1960,11 @@ def parse_destination(destination: str) -> dict | None:
     return nominatim_destination(cleaned) or photon_destination(cleaned)
 
 
-def route_cache_key(origin_lat: float, origin_lng: float, destination: dict) -> str:
-    return f"{origin_lat:.4f},{origin_lng:.4f}:{destination['lat']:.4f},{destination['lng']:.4f}"
+def route_cache_key(origin_lat: float, origin_lng: float, destination: dict, blocked_lane: dict | None = None) -> str:
+    base = f"{origin_lat:.4f},{origin_lng:.4f}:{destination['lat']:.4f},{destination['lng']:.4f}"
+    if not blocked_lane:
+        return base
+    return f"{base}:avoid:{blocked_lane['lat']:.4f},{blocked_lane['lng']:.4f}"
 
 
 def cached_route(route_key: str) -> dict | None:
@@ -1973,20 +1983,88 @@ def cache_route(route_key: str, payload: dict) -> None:
     )
 
 
-def osrm_route_response(origin_lat: float, origin_lng: float, destination: dict) -> dict:
-    route_key = route_cache_key(origin_lat, origin_lng, destination)
+def parse_coordinate_text(value: str) -> dict | None:
+    parts = [part.strip() for part in str(value or "").split(",", 1)]
+    if len(parts) != 2:
+        return None
+    try:
+        lat = float(parts[0])
+        lng = float(parts[1])
+    except ValueError:
+        return None
+    if -90 <= lat <= 90 and -180 <= lng <= 180:
+        return {"lat": lat, "lng": lng}
+    return None
+
+
+def active_lane_block() -> dict | None:
+    rows = db_rows("SELECT lane_diversion, target_label, target_location FROM signal_state WHERE id = 1")
+    if not rows or not rows[0].get("lane_diversion"):
+        return None
+    coords = parse_coordinate_text(rows[0].get("target_location", ""))
+    if not coords:
+        return None
+    coords["label"] = rows[0].get("target_label") or "Blocked lane"
+    return coords
+
+
+def route_touches_blocked_lane(geometry: dict, blocked_lane: dict, threshold_km: float = 0.18) -> bool:
+    coordinates = geometry.get("coordinates", []) if isinstance(geometry, dict) else []
+    if len(coordinates) < 2:
+        return False
+    for first, second in zip(coordinates, coordinates[1:]):
+        if distance_to_segment_km(blocked_lane["lat"], blocked_lane["lng"], first[1], first[0], second[1], second[0]) <= threshold_km:
+            return True
+    return False
+
+
+def distance_to_segment_km(point_lat: float, point_lng: float, start_lat: float, start_lng: float, end_lat: float, end_lng: float) -> float:
+    from math import cos, radians, sqrt
+
+    mean_lat = radians((point_lat + start_lat + end_lat) / 3)
+
+    def project(lat: float, lng: float) -> tuple[float, float]:
+        return (lng * 111.320 * cos(mean_lat), lat * 110.574)
+
+    px, py = project(point_lat, point_lng)
+    ax, ay = project(start_lat, start_lng)
+    bx, by = project(end_lat, end_lng)
+    dx = bx - ax
+    dy = by - ay
+    if dx == 0 and dy == 0:
+        return sqrt((px - ax) ** 2 + (py - ay) ** 2)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+    nearest_x = ax + t * dx
+    nearest_y = ay + t * dy
+    return sqrt((px - nearest_x) ** 2 + (py - nearest_y) ** 2)
+
+
+def osrm_route_response(origin_lat: float, origin_lng: float, destination: dict, blocked_lane: dict | None = None) -> dict:
+    route_key = route_cache_key(origin_lat, origin_lng, destination, blocked_lane)
     cached = cached_route(route_key)
     if cached:
         return cached
 
     coords = f"{origin_lng},{origin_lat};{destination['lng']},{destination['lat']}"
-    params = urllib.parse.urlencode({"overview": "full", "geometries": "geojson", "steps": "false"})
+    params = urllib.parse.urlencode({"overview": "full", "geometries": "geojson", "steps": "false", "alternatives": "true"})
     route_data = fetch_json(f"https://router.project-osrm.org/route/v1/driving/{coords}?{params}")
     routes = route_data.get("routes", []) if isinstance(route_data, dict) else []
     if not routes:
         return {"ok": False, "error": "No road route was found for that destination."}
 
-    route = routes[0]
+    route = None
+    blocked_lane_avoided = False
+    for candidate in routes:
+        candidate_geometry = candidate.get("geometry", {"type": "LineString", "coordinates": []})
+        if blocked_lane and route_touches_blocked_lane(candidate_geometry, blocked_lane):
+            continue
+        route = candidate
+        blocked_lane_avoided = bool(blocked_lane)
+        break
+    if route is None:
+        label = blocked_lane.get("label", "the blocked lane") if blocked_lane else "the blocked lane"
+        return {"ok": False, "error": f"No safe route found without using {label}. Remove the lane block or try another destination."}
+
     geometry = route.get("geometry", {"type": "LineString", "coordinates": []})
     if not geometry.get("coordinates"):
         return {"ok": False, "error": "Road route geometry was empty."}
@@ -2004,6 +2082,7 @@ def osrm_route_response(origin_lat: float, origin_lng: float, destination: dict)
         "duration_text": duration_text,
         "geometry": geometry,
         "source": "osrm_road_route",
+        "blocked_lane_avoided": blocked_lane_avoided,
     }
     cache_route(route_key, payload)
     return payload
@@ -2025,14 +2104,15 @@ def route_summary(query: dict[str, list[str]]) -> dict:
         if not destination:
             return {"ok": False, "error": "Destination was not found."}
 
-        route_key = route_cache_key(origin_lat, origin_lng, destination)
+        blocked_lane = active_lane_block()
+        route_key = route_cache_key(origin_lat, origin_lng, destination, blocked_lane)
         cached = cached_route(route_key)
         if cached:
             return cached
-        return osrm_route_response(origin_lat, origin_lng, destination)
+        return osrm_route_response(origin_lat, origin_lng, destination, blocked_lane)
     except Exception as exc:
         if "destination" in locals():
-            cached = cached_route(route_cache_key(origin_lat, origin_lng, destination))
+            cached = cached_route(route_cache_key(origin_lat, origin_lng, destination, active_lane_block()))
             if cached:
                 return cached
             return {"ok": False, "destination": destination, "error": f"Destination found as {destination['name']}, but road routing is temporarily unavailable. Try again in a minute."}
