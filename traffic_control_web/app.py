@@ -327,6 +327,7 @@ def page_public(user: dict | None) -> bytes:
     .route-dot { width: 18px; height: 18px; border-radius: 999px; border: 3px solid #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
     .route-dot-start { background: #0f766e; }
     .route-dot-end { background: #dc2626; }
+    .blocked-lane-marker { display: grid; height: 36px; width: 36px; place-items: center; border: 3px solid #fff; border-radius: 999px; background: #dc2626; color: #fff; box-shadow: 0 12px 26px rgb(127 29 29 / 0.35); font-weight: 900; }
   </style>"""
     body = f"""
 <aside class="fixed left-0 top-0 z-50 hidden h-full w-64 flex-col border-r border-slate-200 bg-white py-6 lg:flex">
@@ -356,6 +357,10 @@ def page_public(user: dict | None) -> bytes:
             <p id="fallbackLocation" class="font-mono text-slate-600">Waiting for location permission...</p>
           </div>
           <div class="absolute left-4 top-4 rounded-lg border bg-white/90 p-3 shadow-sm backdrop-blur"><p class="text-xs font-bold uppercase text-slate-500">Avg. Speed</p><p id="avgSpeed" class="font-mono text-lg font-bold">24.5 km/h</p><p id="speedTrend" class="text-xs text-red-500">12% from yesterday</p></div>
+          <div id="laneBlockAlert" class="pointer-events-none absolute inset-x-4 top-24 z-[450] hidden rounded-lg border border-red-200 bg-red-600/95 p-3 text-white shadow-sm backdrop-blur">
+            <p class="text-xs font-bold uppercase">Lane blocked by traffic control</p>
+            <p id="laneBlockText" class="mt-1 text-sm">Follow diversion near the active signal.</p>
+          </div>
           <div class="absolute bottom-4 right-4 flex flex-col gap-2">
             <button id="zoomInBtn" class="grid h-10 w-10 place-items-center rounded border bg-white shadow-sm"><span class="material-symbols-outlined">add</span></button>
             <button id="zoomOutBtn" class="grid h-10 w-10 place-items-center rounded border bg-white shadow-sm"><span class="material-symbols-outlined">remove</span></button>
@@ -409,6 +414,8 @@ let routeShadowLine;
 let currentLocationMarker;
 let destinationMarker;
 let routeStartMarker;
+let blockedLaneMarker;
+let blockedLaneCircle;
 let usingTopoLayer = false;
 let routeIndex = 0;
 const routeFocus = [
@@ -431,6 +438,51 @@ function initOpenMap() {{
   setTimeout(() => trafficMap.invalidateSize(), 700);
   window.addEventListener('resize', () => trafficMap.invalidateSize());
   document.getElementById('mapSource').textContent = 'OpenStreetMap with road routing';
+}}
+function parseControlCoordinates(placeLocation) {{
+  const match = String(placeLocation || '').match(/(-?[0-9]+(?:\\.[0-9]+)?)\\s*,\\s*(-?[0-9]+(?:\\.[0-9]+)?)/);
+  if (!match) return null;
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return [lat, lng];
+}}
+function clearBlockedLane() {{
+  document.getElementById('laneBlockAlert').classList.add('hidden');
+  if (blockedLaneMarker) {{ blockedLaneMarker.remove(); blockedLaneMarker = null; }}
+  if (blockedLaneCircle) {{ blockedLaneCircle.remove(); blockedLaneCircle = null; }}
+}}
+function renderBlockedLane(signal) {{
+  if (!signal || !signal.lane_diversion) {{
+    clearBlockedLane();
+    return;
+  }}
+  const label = signal.target_label || 'Traffic control zone';
+  const location = signal.target_location || '';
+  document.getElementById('laneBlockAlert').classList.remove('hidden');
+  document.getElementById('laneBlockText').textContent = `${{label}} - lane diversion active`;
+  const coords = parseControlCoordinates(location);
+  if (!coords || !trafficMap) return;
+  if (!blockedLaneCircle) {{
+    blockedLaneCircle = L.circle(coords, {{ radius: 220, color: '#dc2626', weight: 3, fillColor: '#ef4444', fillOpacity: 0.2 }}).addTo(trafficMap);
+  }} else {{
+    blockedLaneCircle.setLatLng(coords);
+  }}
+  if (!blockedLaneMarker) {{
+    blockedLaneMarker = L.marker(coords, {{
+      icon: L.divIcon({{ className: '', html: '<div class="blocked-lane-marker">!</div>', iconSize: [36, 36], iconAnchor: [18, 18] }})
+    }}).addTo(trafficMap);
+  }} else {{
+    blockedLaneMarker.setLatLng(coords);
+  }}
+  blockedLaneMarker.bindPopup(`${{label}}<br>Lane diversion active`);
+}}
+async function refreshPublicSignal() {{
+  try {{
+    const data = await (await fetch('/api/public-signal')).json();
+    renderBlockedLane(data.signal);
+  }} catch (error) {{}}
 }}
 function renderHotspots(summary) {{
   document.getElementById('avgSpeed').textContent = summary.avg_speed;
@@ -553,6 +605,8 @@ document.getElementById('locateBtn').onclick = () => centerOnCurrentLocation(fal
 document.getElementById('refreshTrafficBtn').onclick = refreshTrafficSummary;
 initOpenMap();
 refreshTrafficSummary();
+refreshPublicSignal();
+setInterval(refreshPublicSignal, 2500);
 centerOnCurrentLocation(true).catch(() => {{}});
 const readFile = file => new Promise((resolve, reject) => {{ const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); }});
 const readArrayBuffer = file => new Promise((resolve, reject) => {{ const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsArrayBuffer(file); }});
@@ -712,6 +766,26 @@ document.getElementById('reportForm').onsubmit = async event => {{
 
 def page_admin(user: dict | None) -> bytes:
     email = (user or {}).get("email", "demo.admin@traffic.local")
+    extra_head = """
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQHLyrcf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    #adminTrafficMap { height: 100%; width: 100%; background: #dbe7f1; }
+    .leaflet-container { font-family: Inter, system-ui, sans-serif; }
+    .admin-map-marker {
+      display: grid;
+      height: 34px;
+      width: 34px;
+      place-items: center;
+      border: 3px solid #ffffff;
+      border-radius: 999px;
+      background: #fd761a;
+      color: #0b1c30;
+      box-shadow: 0 10px 24px rgb(15 23 42 / 0.28);
+      font-weight: 900;
+    }
+  </style>
+"""
     body = f"""
 <header class="sticky top-0 z-40 flex w-full items-center justify-between border-b border-slate-200 bg-white/90 px-6 py-3 backdrop-blur">
   <div class="flex items-center gap-3"><span class="material-symbols-outlined">traffic</span><h1 class="headline text-lg font-bold">Traffic Operations Center</h1></div>
@@ -725,7 +799,7 @@ def page_admin(user: dict | None) -> bytes:
     <a class="grid place-items-center p-4 text-slate-500" href="#accidents"><span class="material-symbols-outlined">report_problem</span></a>
   </aside>
   <section id="map" class="relative h-[353px] w-full overflow-hidden bg-slate-200">
-    <img class="h-full w-full object-cover grayscale-[0.2] contrast-[1.1]" alt="Bangalore junction" src="https://images.unsplash.com/photo-1596176530529-78163a4f7af2?auto=format&fit=crop&w=1400&q=80">
+    <div id="adminTrafficMap" class="h-full w-full"></div>
     <div class="absolute left-4 top-4 rounded-lg border bg-white/90 p-3 shadow-sm"><p class="text-xs font-bold uppercase text-slate-400">Current Node</p><p id="currentNodeLabel" class="headline text-sm font-semibold">Silk Board Junction</p><p id="currentNodeLocation" class="mt-1 font-mono text-xs text-slate-500">12.9177, 77.6238</p></div>
     <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"><span id="mapSignalIcon" class="material-symbols-outlined signal-active text-5xl text-red-700" style="font-variation-settings: 'FILL' 1;">traffic</span></div>
   </section>
@@ -800,10 +874,46 @@ def page_admin(user: dict | None) -> bytes:
 <script>
 async function postJson(url, payload) {{ const res = await fetch(url, {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload) }}); return res.json(); }}
 let selectedControlPlace = {{ label: 'Silk Board Junction', placeLocation: '12.9177, 77.6238' }};
+let adminTrafficMap;
+let adminNodeMarker;
+function parseControlCoordinates(placeLocation) {{
+  const match = String(placeLocation || '').match(/(-?[0-9]+(?:\\.[0-9]+)?)\\s*,\\s*(-?[0-9]+(?:\\.[0-9]+)?)/);
+  if (!match) return null;
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return [lat, lng];
+}}
+function initAdminMap() {{
+  if (!window.L || adminTrafficMap) return;
+  adminTrafficMap = L.map('adminTrafficMap', {{ zoomControl: false }}).setView([12.9177, 77.6238], 15);
+  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }}).addTo(adminTrafficMap);
+  L.control.zoom({{ position: 'bottomright' }}).addTo(adminTrafficMap);
+  adminNodeMarker = L.marker([12.9177, 77.6238], {{
+    icon: L.divIcon({{ className: '', html: '<div class="admin-map-marker">T</div>', iconSize: [34, 34], iconAnchor: [17, 17] }})
+  }}).addTo(adminTrafficMap).bindPopup('Silk Board Junction');
+  setTimeout(() => adminTrafficMap.invalidateSize(), 150);
+  setTimeout(() => adminTrafficMap.invalidateSize(), 700);
+  window.addEventListener('resize', () => adminTrafficMap.invalidateSize());
+}}
+function updateAdminMap(label, placeLocation) {{
+  const coords = parseControlCoordinates(placeLocation);
+  if (!coords || !adminTrafficMap) return;
+  adminTrafficMap.setView(coords, 16);
+  adminTrafficMap.invalidateSize();
+  if (!adminNodeMarker) return;
+  adminNodeMarker.setLatLng(coords);
+  adminNodeMarker.bindPopup(label || 'Selected traffic node');
+}}
 function selectControlPlace(label, placeLocation, jumpToControl = true) {{
   selectedControlPlace = {{ label: label || 'Selected traffic node', placeLocation: placeLocation || 'Unknown location' }};
   document.getElementById('currentNodeLabel').textContent = selectedControlPlace.label;
   document.getElementById('currentNodeLocation').textContent = selectedControlPlace.placeLocation;
+  updateAdminMap(selectedControlPlace.label, selectedControlPlace.placeLocation);
   if (jumpToControl) window.location.hash = 'control';
 }}
 function paintSignal(signal) {{
@@ -880,14 +990,15 @@ async function refresh() {{
   renderAiTraffic(data.traffic_ai);
 }}
 document.querySelectorAll('.signal-btn').forEach(btn => btn.onclick = async () => {{ await postJson('/api/signal', {{signal: btn.dataset.signal, target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }});
-document.getElementById('laneBtn').onclick = async () => {{ await postJson('/api/control-toggle', {{field: 'lane_diversion'}}); refresh(); }};
-document.getElementById('priorityBtn').onclick = async () => {{ await postJson('/api/control-toggle', {{field: 'priority_pass'}}); refresh(); }};
+document.getElementById('laneBtn').onclick = async () => {{ await postJson('/api/control-toggle', {{field: 'lane_diversion', target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }};
+document.getElementById('priorityBtn').onclick = async () => {{ await postJson('/api/control-toggle', {{field: 'priority_pass', target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }};
 document.getElementById('emergencyBtn').onclick = async () => {{ await postJson('/api/signal', {{signal: 'go', priority_pass: 1, target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }};
 document.getElementById('refreshAiBtn').onclick = refresh;
 document.getElementById('applyAiBtn').onclick = async () => {{ const res = await postJson('/api/ai-apply', {{target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); document.getElementById('aiStatus').textContent = res.ok ? 'AI recommendation applied to live signal.' : (res.error || 'AI apply failed.'); refresh(); }};
+initAdminMap(); updateAdminMap(selectedControlPlace.label, selectedControlPlace.placeLocation);
 refresh(); setInterval(refresh, 2500);
 </script>"""
-    return html_page("Traffic Operations Center - Manual Control", body)
+    return html_page("Traffic Operations Center - Manual Control", body, extra_head)
 
 
 class TrafficHandler(BaseHTTPRequestHandler):
@@ -946,6 +1057,8 @@ class TrafficHandler(BaseHTTPRequestHandler):
                 self.json_response({"ok": False, "error": "Admin access required"}, 403)
                 return
             self.json_response(admin_state())
+        elif path == "/api/public-signal":
+            self.json_response(public_signal_state())
         elif path == "/api/route":
             self.json_response(route_summary(query))
         elif path == "/api/traffic-summary":
@@ -998,7 +1111,12 @@ class TrafficHandler(BaseHTTPRequestHandler):
                 if field not in {"lane_diversion", "priority_pass"}:
                     self.json_response({"ok": False, "error": "Invalid field"}, 400)
                     return
-                db_execute(f"UPDATE signal_state SET {field} = CASE {field} WHEN 1 THEN 0 ELSE 1 END, updated_at = ? WHERE id = 1", (int(time.time()),))
+                target_label = payload.get("target_label", "Silk Board Junction")
+                target_location = payload.get("target_location", "12.9177, 77.6238")
+                db_execute(
+                    f"UPDATE signal_state SET {field} = CASE {field} WHEN 1 THEN 0 ELSE 1 END, target_label = ?, target_location = ?, updated_at = ? WHERE id = 1",
+                    (target_label, target_location, int(time.time())),
+                )
                 self.json_response({"ok": True})
             elif parsed.path == "/api/ai-apply":
                 if not is_admin_user(user):
@@ -1475,6 +1593,11 @@ def admin_state() -> dict:
         "traffic_ai": traffic_ai_state(),
         "esp32_worker": esp32_worker_state(),
     }
+
+
+def public_signal_state() -> dict:
+    signal = db_rows("SELECT signal, lane_diversion, priority_pass, target_label, target_location, updated_at FROM signal_state WHERE id = 1")[0]
+    return {"ok": True, "signal": signal}
 
 
 def traffic_ai_state() -> dict:
