@@ -10,6 +10,10 @@ detection_conf: 0.35
 post_interval: 5
 count_window_s: 60
 max_vehicles_for_density: 20
+min_green: 15
+max_green: 75
+yellow_seconds: 3
+all_red_seconds: 2
 
 # Lanes for QVGA 320x240 video; adjust if your video resolution differs
 lanes:

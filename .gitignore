@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.log
+models/
+outputs/
+traffic_control_web/data/*.db
+traffic_control_web/data/uploads/*
+!traffic_control_web/data/uploads/.gitkeep

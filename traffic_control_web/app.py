@@ -41,6 +41,16 @@ AI_SIGNAL_STATE: dict[str, object] = {
     "green_seconds": 0,
     "vehicle_counts": {"cars": 0, "buses": 0, "trucks": 0, "motorcycles": 0, "bicycles": 0, "trains": 0, "total": 0},
 }
+EMERGENCY_PRIORITY: dict[str, object] = {
+    "active": False,
+    "requested_at": 0,
+    "priority_lane": "",
+    "target_label": "",
+    "target_location": "",
+    "warning_seconds": 3,
+    "pedestrian_clearance_seconds": 8,
+    "green_seconds": 25,
+}
 ESP32_WORKER: dict[str, object] = {
     "running": False,
     "stop_event": None,
@@ -358,7 +368,7 @@ def page_public(user: dict | None) -> bytes:
     <section id="live" class="w-full flex-none snap-start space-y-6 p-6">
       <div class="flex flex-col justify-between gap-4 md:flex-row md:items-center">
         <div><span class="rounded bg-red-100 px-2 py-0.5 text-xs font-bold uppercase text-red-600">Live</span><h2 class="headline mt-2 text-2xl font-semibold">Local Traffic Map</h2><p class="text-slate-600">Location-based map and destination routing without paid Google Maps APIs.</p></div>
-        <div class="flex flex-wrap gap-2"><input id="destinationInput" class="min-w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" placeholder="Enter destination for route"><button id="optimizeRoutesBtn" class="rounded-lg bg-slate-950 px-4 py-2 font-medium text-white">Show Route</button><button id="layersBtn" class="rounded-lg border bg-white px-4 py-2 font-medium">Map Style</button></div>
+        <div class="flex flex-wrap gap-2"><input id="sourceInput" class="min-w-52 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" placeholder="Source or blank for GPS"><input id="destinationInput" class="min-w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" placeholder="Destination"><button id="optimizeRoutesBtn" class="rounded-lg bg-slate-950 px-4 py-2 font-medium text-white">Show Route</button><button id="layersBtn" class="rounded-lg border bg-white px-4 py-2 font-medium">Map Style</button></div>
       </div>
       <div class="grid grid-cols-12 gap-6">
         <div class="relative col-span-12 h-[500px] overflow-hidden rounded-lg border border-slate-200 bg-white lg:col-span-8">
@@ -417,6 +427,7 @@ let streetLayer;
 let topoLayer;
 let routeLine;
 let routeShadowLine;
+let routeCongestionLines = [];
 let currentLocationMarker;
 let destinationMarker;
 let routeStartMarker;
@@ -458,32 +469,15 @@ function clearBlockedLane() {{
   if (blockedLaneMarker) {{ blockedLaneMarker.remove(); blockedLaneMarker = null; }}
   if (blockedLaneLine) {{ blockedLaneLine.remove(); blockedLaneLine = null; }}
 }}
+function clearRouteCongestionLines() {{
+  routeCongestionLines.forEach(line => line.remove());
+  routeCongestionLines = [];
+}}
 function blockedLaneSegment(coords) {{
   return [[coords[0], coords[1] - 0.0012], [coords[0], coords[1] + 0.0012]];
 }}
 function renderBlockedLane(signal) {{
-  if (!signal || !signal.lane_diversion) {{
-    clearBlockedLane();
-    return;
-  }}
-  const label = signal.target_label || 'Traffic control zone';
-  const location = signal.target_location || '';
-  const coords = parseControlCoordinates(location);
-  if (!coords || !trafficMap) return;
-  const segment = blockedLaneSegment(coords);
-  if (!blockedLaneLine) {{
-    blockedLaneLine = L.polyline(segment, {{ color: '#dc2626', weight: 12, opacity: 0.9, lineCap: 'round' }}).addTo(trafficMap);
-  }} else {{
-    blockedLaneLine.setLatLngs(segment);
-  }}
-  if (!blockedLaneMarker) {{
-    blockedLaneMarker = L.marker(coords, {{
-      icon: L.divIcon({{ className: '', html: '<div class="blocked-lane-marker">!</div>', iconSize: [36, 36], iconAnchor: [18, 18] }})
-    }}).addTo(trafficMap);
-  }} else {{
-    blockedLaneMarker.setLatLng(coords);
-  }}
-  blockedLaneMarker.bindPopup(`${{label}}<br>Lane blocked by traffic control`);
+  clearBlockedLane();
 }}
 async function refreshPublicSignal() {{
   try {{
@@ -551,6 +545,7 @@ async function centerOnCurrentLocation(fromAutoLoad = false) {{
   }}
 }}
 async function optimizeBestRoute() {{
+  const source = document.getElementById('sourceInput').value.trim();
   const destination = document.getElementById('destinationInput').value.trim();
   const summary = document.getElementById('routeSummary');
   if (!destination) {{
@@ -560,8 +555,13 @@ async function optimizeBestRoute() {{
   }}
   summary.textContent = 'Finding your best route...';
   try {{
-    const origin = await centerOnCurrentLocation(false);
-    const params = new URLSearchParams({{ origin_lat: origin.lat, origin_lng: origin.lng, destination }});
+    let params;
+    if (source) {{
+      params = new URLSearchParams({{ origin: source, destination }});
+    }} else {{
+      const origin = await centerOnCurrentLocation(false);
+      params = new URLSearchParams({{ origin_lat: origin.lat, origin_lng: origin.lng, destination }});
+    }}
     const res = await fetch(`/api/route?${{params.toString()}}`);
     const route = await res.json();
     if (!res.ok || !route.ok) {{
@@ -576,11 +576,25 @@ async function optimizeBestRoute() {{
     }}
     if (routeLine) routeLine.remove();
     if (routeShadowLine) routeShadowLine.remove();
+    clearRouteCongestionLines();
     if (destinationMarker) destinationMarker.remove();
     if (routeStartMarker) routeStartMarker.remove();
     routeShadowLine = L.polyline(coords, {{ color: '#0b1c30', weight: 12, opacity: 0.45 }}).addTo(trafficMap);
-    routeLine = L.polyline(coords, {{ color: '#fd761a', weight: 7, opacity: 1 }}).addTo(trafficMap);
+    routeLine = L.polyline(coords, {{ color: '#16a34a', weight: 7, opacity: 1 }}).addTo(trafficMap);
+    (route.congestion_segments || []).forEach(segment => {{
+      const segmentCoords = (segment.coordinates || []).map(([lng, lat]) => [lat, lng]);
+      if (segmentCoords.length < 2) return;
+      const line = L.polyline(segmentCoords, {{
+        color: segment.color || '#dc2626',
+        weight: 9,
+        opacity: 0.95,
+        lineCap: 'round'
+      }}).addTo(trafficMap);
+      line.bindPopup(`${{segment.label || 'Congested camera zone'}}<br>${{segment.density || 0}}% congestion`);
+      routeCongestionLines.push(line);
+    }});
     routeStartMarker = L.marker(coords[0], {{ icon: L.divIcon({{ className: '', html: '<div class="route-dot route-dot-start"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }}) }}).addTo(trafficMap).bindPopup('Start: your current location');
+    if (route.origin) routeStartMarker.bindPopup(`Start: ${{route.origin.name || source || 'your current location'}}`);
     destinationMarker = L.marker([route.destination.lat, route.destination.lng], {{ icon: L.divIcon({{ className: '', html: '<div class="route-dot route-dot-end"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }}) }}).addTo(trafficMap).bindPopup(route.destination.name || destination);
     trafficMap.invalidateSize();
     setTimeout(() => {{
@@ -588,8 +602,9 @@ async function optimizeBestRoute() {{
       trafficMap.fitBounds(routeLine.getBounds(), {{ padding: [52, 52], maxZoom: 15 }});
     }}, 80);
     setTimeout(() => trafficMap.invalidateSize(), 500);
-    summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}} by road.`;
-    document.getElementById('mapSource').textContent = route.blocked_lane_avoided ? 'Road route avoids blocked lane' : (route.cached ? 'Road route from cache' : 'Road route from OSRM/OpenStreetMap');
+    const congestionText = route.congestion_segments && route.congestion_segments.length ? ` Live congestion marked on ${{route.congestion_segments.length}} route part(s).` : '';
+    summary.textContent = `${{route.destination.name || destination}}: ${{route.distance_text}}, about ${{route.duration_text}} by road.${{congestionText}}`;
+    document.getElementById('mapSource').textContent = route.cached ? 'Road route from cache with live congestion overlay' : 'Fastest OSRM route scored with live ESP32 congestion';
   }} catch (error) {{
     summary.textContent = 'Allow location permission and check the destination spelling so the route can be calculated.';
   }}
@@ -1042,7 +1057,11 @@ async function refresh() {{
 document.querySelectorAll('.signal-btn').forEach(btn => btn.onclick = async () => {{ await postJson('/api/signal', {{signal: btn.dataset.signal, target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }});
 document.getElementById('laneBtn').onclick = async () => {{ await postJson('/api/control-toggle', {{field: 'lane_diversion', target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }};
 document.getElementById('priorityBtn').onclick = async () => {{ await postJson('/api/control-toggle', {{field: 'priority_pass', target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }};
-document.getElementById('emergencyBtn').onclick = async () => {{ await postJson('/api/signal', {{signal: 'go', priority_pass: 1, target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); refresh(); }};
+document.getElementById('emergencyBtn').onclick = async () => {{
+  const res = await postJson('/api/emergency-priority', {{priority_lane: selectedControlPlace.label, target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}});
+  document.getElementById('aiStatus').textContent = res.ok ? 'Emergency priority staged: warning, pedestrian clearance, then green.' : (res.error || 'Emergency priority failed.');
+  refresh();
+}};
 document.getElementById('refreshAiBtn').onclick = refresh;
 document.getElementById('applyAiBtn').onclick = async () => {{ const res = await postJson('/api/ai-apply', {{target_label: selectedControlPlace.label, target_location: selectedControlPlace.placeLocation}}); document.getElementById('aiStatus').textContent = res.ok ? 'AI recommendation applied to live signal.' : (res.error || 'AI apply failed.'); refresh(); }};
 initAdminMap(); updateAdminMap(selectedControlPlace.label, selectedControlPlace.placeLocation);
@@ -1109,6 +1128,14 @@ class TrafficHandler(BaseHTTPRequestHandler):
             self.json_response(admin_state())
         elif path == "/api/public-signal":
             self.json_response(public_signal_state())
+        elif path == "/api/iot/signal-state":
+            token = query.get("token", [""])[0]
+            auth_header = self.headers.get("Authorization", "")
+            bearer = auth_header.removeprefix("Bearer ").strip()
+            if token != IOT_NODE_TOKEN and bearer != IOT_NODE_TOKEN:
+                self.json_response({"ok": False, "error": "Invalid IoT node token"}, 403)
+                return
+            self.json_response(iot_signal_state(query.get("lane", [""])[0]))
         elif path == "/api/route":
             self.json_response(route_summary(query))
         elif path == "/api/traffic-summary":
@@ -1181,6 +1208,12 @@ class TrafficHandler(BaseHTTPRequestHandler):
                     (ai["recommended_signal"], 1 if ai["emergency_priority"] else 0, target_label, target_location, int(time.time())),
                 )
                 self.json_response({"ok": True, "traffic_ai": ai})
+            elif parsed.path == "/api/emergency-priority":
+                if not is_admin_user(user):
+                    self.json_response({"ok": False, "error": "Admin access required"}, 403)
+                    return
+                result = start_emergency_priority(self.read_json())
+                self.json_response(result)
             elif parsed.path == "/api/camera-density":
                 if not is_admin_user(user):
                     self.json_response({"ok": False, "error": "Admin access required"}, 403)
@@ -1346,6 +1379,8 @@ def update_camera_feed(payload: dict, source: str) -> None:
     vehicle_count = max(0, int(payload.get("vehicle_count", 0)))
     confidence = max(0, min(100, int(payload.get("confidence", 70))))
     vehicle_counts = normalize_vehicle_counts(payload.get("vehicle_counts", {}), vehicle_count)
+    target_location = payload.get("target_location", payload.get("location", ""))
+    target_coords = parse_coordinate_text(target_location)
     CAMERA_FEED[lane] = {
         "name": lane,
         "density": density,
@@ -1354,6 +1389,10 @@ def update_camera_feed(payload: dict, source: str) -> None:
         "confidence": confidence,
         "source": payload.get("source", source),
         "camera_url": payload.get("camera_url", ""),
+        "target_label": payload.get("target_label", lane),
+        "target_location": target_location,
+        "lat": target_coords["lat"] if target_coords else None,
+        "lng": target_coords["lng"] if target_coords else None,
         "updated_at": int(time.time()),
     }
 
@@ -1412,6 +1451,8 @@ def update_ai_model_feed(payload: dict) -> dict:
             "density": density,
             "confidence": confidence,
             "source": payload.get("source", "separate-ai-model"),
+            "target_label": payload.get("target_label", lane),
+            "target_location": payload.get("target_location", ""),
         },
         source="separate-ai-model",
     )
@@ -1629,7 +1670,7 @@ def esp32_worker_loop(cv2, stream_url: str, lane: str, stop_event: threading.Eve
 
 
 def admin_state() -> dict:
-    signal = db_rows("SELECT signal, lane_diversion, priority_pass, target_label, target_location, updated_at FROM signal_state WHERE id = 1")[0]
+    signal = public_signal_state()["signal"]
     total_scans = db_rows("SELECT COUNT(*) AS count FROM qr_scans")[0]["count"]
     latest_scans = db_rows("SELECT * FROM qr_scans ORDER BY id DESC LIMIT 10")
     reports = db_rows("SELECT * FROM accident_reports ORDER BY id DESC LIMIT 30")
@@ -1647,7 +1688,136 @@ def admin_state() -> dict:
 
 def public_signal_state() -> dict:
     signal = db_rows("SELECT signal, lane_diversion, priority_pass, target_label, target_location, updated_at FROM signal_state WHERE id = 1")[0]
+    emergency = emergency_priority_state()
+    if emergency.get("active"):
+        signal = dict(signal)
+        signal["signal"] = emergency["default_signal"]
+        signal["priority_pass"] = 1
+        signal["target_label"] = emergency["target_label"]
+        signal["target_location"] = emergency["target_location"]
+        signal["emergency_priority"] = emergency
     return {"ok": True, "signal": signal}
+
+
+def lane_matches(candidate: str, priority_lane: str, target_label: str) -> bool:
+    candidate = str(candidate or "").strip().lower()
+    priority_lane = str(priority_lane or "").strip().lower()
+    target_label = str(target_label or "").strip().lower()
+    if not candidate:
+        return True
+    return candidate in {priority_lane, target_label}
+
+
+def start_emergency_priority(payload: dict) -> dict:
+    now = int(time.time())
+    priority_lane = str(payload.get("priority_lane") or payload.get("lane") or payload.get("target_label") or "Emergency lane").strip()
+    target_label = str(payload.get("target_label") or priority_lane).strip()
+    target_location = str(payload.get("target_location") or payload.get("location") or "Emergency corridor").strip()
+    EMERGENCY_PRIORITY.update(
+        {
+            "active": True,
+            "requested_at": now,
+            "priority_lane": priority_lane,
+            "target_label": target_label,
+            "target_location": target_location,
+            "warning_seconds": max(2, int(payload.get("warning_seconds", 3) or 3)),
+            "pedestrian_clearance_seconds": max(5, int(payload.get("pedestrian_clearance_seconds", 8) or 8)),
+            "green_seconds": max(10, int(payload.get("green_seconds", 25) or 25)),
+        }
+    )
+    db_execute(
+        "UPDATE signal_state SET signal = ?, priority_pass = ?, target_label = ?, target_location = ?, updated_at = ? WHERE id = 1",
+        ("slow", 1, target_label, target_location, now),
+    )
+    return {"ok": True, "emergency_priority": emergency_priority_state()}
+
+
+def emergency_priority_state(lane: str = "") -> dict:
+    if not EMERGENCY_PRIORITY.get("active"):
+        return {"active": False}
+    now = int(time.time())
+    requested_at = int(EMERGENCY_PRIORITY.get("requested_at", 0) or 0)
+    warning_seconds = int(EMERGENCY_PRIORITY.get("warning_seconds", 3) or 3)
+    clearance_seconds = int(EMERGENCY_PRIORITY.get("pedestrian_clearance_seconds", 8) or 8)
+    green_seconds = int(EMERGENCY_PRIORITY.get("green_seconds", 25) or 25)
+    elapsed = max(0, now - requested_at)
+    total_seconds = warning_seconds + clearance_seconds + green_seconds
+    priority_lane = str(EMERGENCY_PRIORITY.get("priority_lane", ""))
+    target_label = str(EMERGENCY_PRIORITY.get("target_label", priority_lane))
+    target_location = str(EMERGENCY_PRIORITY.get("target_location", ""))
+
+    if elapsed >= total_seconds:
+        EMERGENCY_PRIORITY["active"] = False
+        db_execute(
+            "UPDATE signal_state SET signal = ?, priority_pass = ?, target_label = ?, target_location = ?, updated_at = ? WHERE id = 1",
+            ("ai", 0, target_label, target_location, now),
+        )
+        return {"active": False}
+
+    if elapsed < warning_seconds:
+        stage = "warning"
+        default_signal = "slow"
+        lane_signal = "slow"
+        remaining = warning_seconds - elapsed
+        message = "Emergency requested. Yellow warning active; pedestrians should not start crossing."
+    elif elapsed < warning_seconds + clearance_seconds:
+        stage = "pedestrian_clearance"
+        default_signal = "stop"
+        lane_signal = "stop"
+        remaining = warning_seconds + clearance_seconds - elapsed
+        message = "All-red pedestrian clearance active before ambulance green."
+    else:
+        stage = "priority_green"
+        default_signal = "go"
+        lane_signal = "go" if lane_matches(lane, priority_lane, target_label) else "stop"
+        remaining = total_seconds - elapsed
+        message = "Priority lane green; conflicting lanes stay red."
+
+    return {
+        "active": True,
+        "stage": stage,
+        "default_signal": default_signal,
+        "lane_signal": lane_signal,
+        "priority_lane": priority_lane,
+        "target_label": target_label,
+        "target_location": target_location,
+        "remaining_seconds": remaining,
+        "elapsed_seconds": elapsed,
+        "warning_seconds": warning_seconds,
+        "pedestrian_clearance_seconds": clearance_seconds,
+        "green_seconds": green_seconds,
+        "message": message,
+    }
+
+
+def signal_lights(signal: str) -> dict:
+    signal = str(signal or "stop").lower()
+    return {
+        "red": signal == "stop",
+        "yellow": signal in {"slow", "ai"},
+        "green": signal == "go",
+    }
+
+
+def iot_signal_state(lane: str = "") -> dict:
+    signal_payload = public_signal_state()["signal"]
+    ai = traffic_ai_state()
+    signal = str(signal_payload.get("signal", "stop")).lower()
+    emergency = emergency_priority_state(lane)
+    if emergency.get("active"):
+        signal = str(emergency["lane_signal"]).lower()
+    return {
+        "ok": True,
+        "signal": signal,
+        "lights": signal_lights(signal),
+        "emergency_priority": emergency,
+        "green_seconds": ai.get("green_seconds", 20),
+        "green_remaining": ai.get("green_remaining", 0),
+        "priority_lane": ai.get("priority_lane", ""),
+        "average_density": ai.get("average_density", 0),
+        "vehicle_counts": ai.get("vehicle_counts", {}),
+        "updated_at": signal_payload.get("updated_at", int(time.time())),
+    }
 
 
 def traffic_ai_state() -> dict:
@@ -1960,11 +2130,20 @@ def parse_destination(destination: str) -> dict | None:
     return nominatim_destination(cleaned) or photon_destination(cleaned)
 
 
-def route_cache_key(origin_lat: float, origin_lng: float, destination: dict, blocked_lane: dict | None = None) -> str:
+def congestion_signature(zones: list[dict]) -> str:
+    if not zones:
+        return "no-live-congestion"
+    parts = []
+    for zone in zones:
+        parts.append(f"{zone['lat']:.3f},{zone['lng']:.3f}:{int(zone['density']) // 10}")
+    return "|".join(sorted(parts))
+
+
+def route_cache_key(origin_lat: float, origin_lng: float, destination: dict, blocked_lane: dict | None = None, congestion_zones: list[dict] | None = None) -> str:
     base = f"{origin_lat:.4f},{origin_lng:.4f}:{destination['lat']:.4f},{destination['lng']:.4f}"
-    if not blocked_lane:
-        return base
-    return f"{base}:avoid:{blocked_lane['lat']:.4f},{blocked_lane['lng']:.4f}"
+    if blocked_lane:
+        base = f"{base}:avoid:{blocked_lane['lat']:.4f},{blocked_lane['lng']:.4f}"
+    return f"{base}:traffic:{congestion_signature(congestion_zones or [])}"
 
 
 def cached_route(route_key: str) -> dict | None:
@@ -1998,14 +2177,36 @@ def parse_coordinate_text(value: str) -> dict | None:
 
 
 def active_lane_block() -> dict | None:
-    rows = db_rows("SELECT lane_diversion, target_label, target_location FROM signal_state WHERE id = 1")
-    if not rows or not rows[0].get("lane_diversion"):
-        return None
-    coords = parse_coordinate_text(rows[0].get("target_location", ""))
-    if not coords:
-        return None
-    coords["label"] = rows[0].get("target_label") or "Blocked lane"
-    return coords
+    return None
+
+
+def live_congestion_zones(max_age_seconds: int = 30) -> list[dict]:
+    now = int(time.time())
+    zones = []
+    for feed in CAMERA_FEED.values():
+        if now - int(feed.get("updated_at", 0) or 0) > max_age_seconds:
+            continue
+        density = int(feed.get("density", 0) or 0)
+        if density < 35:
+            continue
+        lat = feed.get("lat")
+        lng = feed.get("lng")
+        if lat is None or lng is None:
+            coords = parse_coordinate_text(feed.get("target_location", ""))
+            if not coords:
+                continue
+            lat = coords["lat"]
+            lng = coords["lng"]
+        zones.append(
+            {
+                "lat": float(lat),
+                "lng": float(lng),
+                "density": density,
+                "label": feed.get("target_label") or feed.get("name") or "Live camera zone",
+                "vehicle_count": int(feed.get("vehicle_count", 0) or 0),
+            }
+        )
+    return zones
 
 
 def route_touches_blocked_lane(geometry: dict, blocked_lane: dict, threshold_km: float = 0.18) -> bool:
@@ -2016,6 +2217,47 @@ def route_touches_blocked_lane(geometry: dict, blocked_lane: dict, threshold_km:
         if distance_to_segment_km(blocked_lane["lat"], blocked_lane["lng"], first[1], first[0], second[1], second[0]) <= threshold_km:
             return True
     return False
+
+
+def route_congestion_segments(geometry: dict, zones: list[dict], threshold_km: float = 0.35) -> list[dict]:
+    coordinates = geometry.get("coordinates", []) if isinstance(geometry, dict) else []
+    segments = []
+    if len(coordinates) < 2 or not zones:
+        return segments
+    for first, second in zip(coordinates, coordinates[1:]):
+        matched_zone = None
+        for zone in zones:
+            distance = distance_to_segment_km(zone["lat"], zone["lng"], first[1], first[0], second[1], second[0])
+            if distance <= threshold_km and (matched_zone is None or zone["density"] > matched_zone["density"]):
+                matched_zone = zone
+        if not matched_zone:
+            continue
+        density = int(matched_zone["density"])
+        segments.append(
+            {
+                "coordinates": [first, second],
+                "density": density,
+                "label": matched_zone["label"],
+                "vehicle_count": matched_zone["vehicle_count"],
+                "color": "#dc2626" if density >= 70 else "#f97316",
+            }
+        )
+    return segments
+
+
+def route_congestion_penalty_seconds(geometry: dict, zones: list[dict]) -> int:
+    penalty = 0
+    for segment in route_congestion_segments(geometry, zones):
+        density = int(segment["density"])
+        if density >= 85:
+            penalty += 240
+        elif density >= 70:
+            penalty += 150
+        elif density >= 50:
+            penalty += 75
+        else:
+            penalty += 30
+    return penalty
 
 
 def distance_to_segment_km(point_lat: float, point_lng: float, start_lat: float, start_lng: float, end_lat: float, end_lng: float) -> float:
@@ -2039,8 +2281,9 @@ def distance_to_segment_km(point_lat: float, point_lng: float, start_lat: float,
     return sqrt((px - nearest_x) ** 2 + (py - nearest_y) ** 2)
 
 
-def osrm_route_response(origin_lat: float, origin_lng: float, destination: dict, blocked_lane: dict | None = None) -> dict:
-    route_key = route_cache_key(origin_lat, origin_lng, destination, blocked_lane)
+def osrm_route_response(origin_lat: float, origin_lng: float, destination: dict, blocked_lane: dict | None = None, congestion_zones: list[dict] | None = None) -> dict:
+    congestion_zones = congestion_zones or []
+    route_key = route_cache_key(origin_lat, origin_lng, destination, blocked_lane, congestion_zones)
     cached = cached_route(route_key)
     if cached:
         return cached
@@ -2054,13 +2297,16 @@ def osrm_route_response(origin_lat: float, origin_lng: float, destination: dict,
 
     route = None
     blocked_lane_avoided = False
+    best_score = None
     for candidate in routes:
         candidate_geometry = candidate.get("geometry", {"type": "LineString", "coordinates": []})
         if blocked_lane and route_touches_blocked_lane(candidate_geometry, blocked_lane):
             continue
-        route = candidate
-        blocked_lane_avoided = bool(blocked_lane)
-        break
+        score = float(candidate.get("duration", 0) or 0) + route_congestion_penalty_seconds(candidate_geometry, congestion_zones)
+        if best_score is None or score < best_score:
+            route = candidate
+            best_score = score
+            blocked_lane_avoided = bool(blocked_lane)
     if route is None:
         label = blocked_lane.get("label", "the blocked lane") if blocked_lane else "the blocked lane"
         return {"ok": False, "error": f"No safe route found without using {label}. Remove the lane block or try another destination."}
@@ -2071,16 +2317,21 @@ def osrm_route_response(origin_lat: float, origin_lng: float, destination: dict,
 
     distance_km_value = route.get("distance", 0) / 1000
     duration_min_value = route.get("duration", 0) / 60
+    congestion_segments = route_congestion_segments(geometry, congestion_zones)
     duration_text = f"{round(duration_min_value)} mins" if duration_min_value < 90 else f"{round(duration_min_value / 60, 1)} hrs"
     payload = {
         "ok": True,
         "cached": False,
+        "origin": {"lat": origin_lat, "lng": origin_lng, "name": "Current location"},
         "destination": destination,
         "distance_km": round(distance_km_value, 1),
         "distance_text": f"{round(distance_km_value, 1)} km",
         "duration_min": round(duration_min_value),
         "duration_text": duration_text,
         "geometry": geometry,
+        "congestion_segments": congestion_segments,
+        "live_congestion_zones": congestion_zones,
+        "congestion_penalty_seconds": route_congestion_penalty_seconds(geometry, congestion_zones),
         "source": "osrm_road_route",
         "blocked_lane_avoided": blocked_lane_avoided,
     }
@@ -2089,11 +2340,21 @@ def osrm_route_response(origin_lat: float, origin_lng: float, destination: dict,
 
 
 def route_summary(query: dict[str, list[str]]) -> dict:
-    try:
-        origin_lat = float(query.get("origin_lat", [""])[0])
-        origin_lng = float(query.get("origin_lng", [""])[0])
-    except ValueError:
-        return {"ok": False, "error": "Current location is required."}
+    origin_text = query.get("origin", [""])[0].strip()
+    origin = None
+    if origin_text:
+        origin = parse_destination(origin_text)
+        if not origin:
+            return {"ok": False, "error": "Source was not found. Try a more specific place name with city/state, or use lat,lng."}
+        origin_lat = float(origin["lat"])
+        origin_lng = float(origin["lng"])
+    else:
+        try:
+            origin_lat = float(query.get("origin_lat", [""])[0])
+            origin_lng = float(query.get("origin_lng", [""])[0])
+            origin = {"lat": origin_lat, "lng": origin_lng, "name": "Current location"}
+        except ValueError:
+            return {"ok": False, "error": "Current location is required, or enter a source."}
 
     destination_text = query.get("destination", [""])[0].strip()
     if not destination_text:
@@ -2105,14 +2366,19 @@ def route_summary(query: dict[str, list[str]]) -> dict:
             return {"ok": False, "error": "Destination was not found."}
 
         blocked_lane = active_lane_block()
-        route_key = route_cache_key(origin_lat, origin_lng, destination, blocked_lane)
+        congestion_zones = live_congestion_zones()
+        route_key = route_cache_key(origin_lat, origin_lng, destination, blocked_lane, congestion_zones)
         cached = cached_route(route_key)
         if cached:
+            cached["origin"] = origin
             return cached
-        return osrm_route_response(origin_lat, origin_lng, destination, blocked_lane)
+        route = osrm_route_response(origin_lat, origin_lng, destination, blocked_lane, congestion_zones)
+        if route.get("ok"):
+            route["origin"] = origin
+        return route
     except Exception as exc:
         if "destination" in locals():
-            cached = cached_route(route_cache_key(origin_lat, origin_lng, destination, active_lane_block()))
+            cached = cached_route(route_cache_key(origin_lat, origin_lng, destination, active_lane_block(), live_congestion_zones()))
             if cached:
                 return cached
             return {"ok": False, "destination": destination, "error": f"Destination found as {destination['name']}, but road routing is temporarily unavailable. Try again in a minute."}

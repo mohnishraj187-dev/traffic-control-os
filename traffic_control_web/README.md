@@ -120,6 +120,38 @@ python traffic_control_web\tools\traffic_ai_model.py --source "http://192.168.1.
 
 The AI model reads the ESP32-CAM stream, counts vehicle classes, calculates density, and posts the live signal recommendation to `/api/ai-traffic-update`. For an SIH demo, present this as one deployed field node plus an area-level dashboard with three simulated neighboring junctions.
 
+## Live Congestion Routing And ESP32 Lights
+
+Live AI updates now affect routing and the physical signal output:
+
+- The route API still uses OSRM/OpenStreetMap for the base fastest road route.
+- If OSRM returns alternatives, the backend adds a penalty for routes that pass near live camera zones above 35% density.
+- Route parts near live congestion are returned as `congestion_segments`; the public map draws those parts orange/red.
+- The camera zone must include a coordinate in `target_location`, formatted like `12.9177, 77.6238`.
+- The ESP32 can poll `/api/iot/signal-state?token=dev-traffic-node` and drive red/yellow/green outputs.
+
+For the signal-light side, open:
+
+```text
+traffic_control_web/esp32_cam_node/ESP32SignalLightClient/ESP32SignalLightClient.ino
+```
+
+Set `API_BASE_URL` to your laptop LAN IP and set `LANE_NAME` to the signal this ESP32 controls, for example:
+
+```text
+API_BASE_URL = http://192.168.1.10:5000/api/iot/signal-state
+LANE_NAME = Eastbound camera
+```
+
+Do not use `127.0.0.1` from the ESP32, because that points to the ESP32 itself, not your laptop.
+
+Emergency/ambulance priority is staged for pedestrian safety:
+
+1. Yellow warning for 3 seconds.
+2. All-red pedestrian clearance for 8 seconds.
+3. Priority lane green for the emergency vehicle while conflicting signal ESP32 boards stay red.
+4. The controller returns to AI mode after the emergency window.
+
 For a production city system:
 
 - Run a camera worker near each junction using OpenCV plus a vehicle detector such as YOLO.

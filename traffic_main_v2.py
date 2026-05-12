@@ -78,13 +78,14 @@ def xyxy_to_centroid(xyxy):
     return (int((x1+x2)/2), int((y1+y2)/2))
 
 
-def signal_for_density(density, green_lane):
-    if density >= 65:
+def signal_for_controller_state(state):
+    phase = state.get('phase', 'GREEN')
+    if phase == 'GREEN':
         return 'go'
-    if density >= 35:
+    if phase == 'YELLOW':
         return 'slow'
-    if green_lane:
-        return 'go'
+    if phase == 'ALL_RED':
+        return 'stop'
     return 'ai'
 
 
@@ -97,14 +98,42 @@ def vehicle_class_counts(vehicle_dets):
     return counts
 
 
-def build_ai_payload(cfg, vehicle_dets, per_lane_counts, total_unique, state):
+def clipped_box_area(xyxy, rect):
+    x1, y1, x2, y2 = xyxy
+    rx1, ry1, rx2, ry2 = rect
+    ix1 = max(float(x1), float(rx1))
+    iy1 = max(float(y1), float(ry1))
+    ix2 = min(float(x2), float(rx2))
+    iy2 = min(float(y2), float(ry2))
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    return (ix2 - ix1) * (iy2 - iy1)
+
+
+def lane_occupancy(vehicle_dets, lanes):
+    occupancy = {}
+    for lane in lanes:
+        x1, y1, x2, y2 = lane.rect
+        lane_area = max(1.0, float((x2 - x1) * (y2 - y1)))
+        occupied_area = sum(clipped_box_area(det['xyxy'], lane.rect) for det in vehicle_dets)
+        occupancy[lane.name] = min(100, round((occupied_area / lane_area) * 100))
+    return occupancy
+
+
+def combined_density(vehicle_count, occupancy_percent, max_vehicles):
+    count_density = min(100, round(vehicle_count / max(1, max_vehicles) * 100))
+    return min(100, round(occupancy_percent * 0.6 + count_density * 0.4))
+
+
+def build_ai_payload(cfg, vehicle_dets, per_lane_counts, per_lane_occupancy, total_unique, state):
     max_vehicles = max(1, int(cfg.get('max_vehicles_for_density', 20)))
-    density = min(100, round(total_unique / max_vehicles * 100))
-    green_lane = None
-    for lane_name, signal in state.items():
-        if signal == 'GREEN':
-            green_lane = lane_name
-            break
+    green_lane = state.get('active_direction')
+    if state.get('phase') != 'GREEN':
+        green_lane = state.get('pending_direction') or green_lane
+    priority_lane = green_lane or cfg.get('dashboard_lane', 'Eastbound camera')
+    priority_count = per_lane_counts.get(priority_lane, total_unique)
+    priority_occupancy = per_lane_occupancy.get(priority_lane, max(per_lane_occupancy.values(), default=0))
+    density = combined_density(priority_count, priority_occupancy, max_vehicles)
     counts = vehicle_class_counts(vehicle_dets)
     if sum(counts.values()) < total_unique:
         counts['cars'] += total_unique - sum(counts.values())
@@ -117,9 +146,13 @@ def build_ai_payload(cfg, vehicle_dets, per_lane_counts, total_unique, state):
         'vehicle_counts': counts,
         'density': density,
         'confidence': round(max([det['conf'] for det in vehicle_dets], default=0.7) * 100),
-        'recommended_signal': signal_for_density(density, green_lane),
+        'recommended_signal': signal_for_controller_state(state),
         'green_seconds': int(state.get('green_duration', max(15, min(120, 20 + density)))),
+        'signal_phase': state.get('phase', 'GREEN'),
+        'green_remaining': int(state.get('green_remaining', 0)),
+        'signal_scores': state.get('scores', {}),
         'per_lane_counts': per_lane_counts,
+        'per_lane_occupancy': per_lane_occupancy,
         'source': 'traffic-main-v2-yolo',
     }
 
@@ -155,7 +188,12 @@ def main():
 
     cap = cv2.VideoCapture(source)
     centroid_tracker = CentroidTracker(max_disappeared=30, max_distance=60)
-    controller = SignalController()
+    controller = SignalController(
+        min_green=int(cfg.get('min_green', 15)),
+        max_green=int(cfg.get('max_green', 75)),
+        yellow_seconds=int(cfg.get('yellow_seconds', 3)),
+        all_red_seconds=int(cfg.get('all_red_seconds', 2)),
+    )
 
     # outputs and logging
     outputs_dir = cfg.get('outputs_dir', os.path.join(os.getcwd(), 'outputs'))
@@ -233,12 +271,16 @@ def main():
             per_lane_sets.setdefault(lane, set()).add(tid)
         per_lane_counts = {lane: len(s) for lane,s in per_lane_sets.items()}
         total_unique = len(active_ids)
+        per_lane_occupancy = lane_occupancy(vehicle_dets, lanes)
 
         # decide signal based on simple split between first two lanes (if available)
         densities = {}
         if len(lanes) >= 2:
-            densities = { 'north_south': per_lane_counts.get(lanes[0].name,0),
-                          'east_west': per_lane_counts.get(lanes[1].name,0) }
+            max_vehicles = max(1, int(cfg.get('max_vehicles_for_density', 20)))
+            densities = {
+                'north_south': combined_density(per_lane_counts.get(lanes[0].name, 0), per_lane_occupancy.get(lanes[0].name, 0), max_vehicles),
+                'east_west': combined_density(per_lane_counts.get(lanes[1].name, 0), per_lane_occupancy.get(lanes[1].name, 0), max_vehicles)
+            }
         else:
             densities = { 'north_south': total_unique, 'east_west': 0 }
         state = controller.decide(densities)
@@ -292,7 +334,7 @@ def main():
         cv2.imshow('traffic', frame)
 
         if (webhook or ai_api_url) and (now - last_post) > post_interval:
-            payload = build_ai_payload(cfg, vehicle_dets, per_lane_counts, total_unique, state)
+            payload = build_ai_payload(cfg, vehicle_dets, per_lane_counts, per_lane_occupancy, total_unique, state)
             if webhook:
                 legacy_payload = {
                 'timestamp': now,
