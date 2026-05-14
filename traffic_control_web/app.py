@@ -320,14 +320,13 @@ def page_login() -> bytes:
     return html_page("TrafficControl OS | Gateway", body)
 
 
-def page_access_denied(email: str) -> bytes:
-    body = f"""
+def page_access_denied() -> bytes:
+    body = """
 <main class="grid min-h-screen place-items-center bg-[#f8f9ff] p-6 font-sans text-[#0b1c30]">
   <section class="w-full max-w-md rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
     <span class="material-symbols-outlined mb-4 text-5xl text-red-600">block</span>
     <h1 class="headline mb-2 text-2xl font-bold">Admin Access Denied</h1>
-    <p class="mb-4 text-slate-600">The account <b>{email or "unknown"}</b> is not allowed to enter the admin portal.</p>
-    <p class="rounded bg-slate-50 p-3 text-sm text-slate-500">Admin access is restricted to {admin_email_list()}.</p>
+    <p class="mb-4 text-slate-600">You do not have permission to enter the admin portal.</p>
     <a class="mt-6 inline-block rounded-lg bg-slate-950 px-4 py-3 font-bold text-white" href="/">Back to Login</a>
   </section>
 </main>"""
@@ -1150,8 +1149,7 @@ class TrafficHandler(BaseHTTPRequestHandler):
             self.redirect("/admin/dashboard")
         elif path == "/admin/dashboard":
             if not user or not is_admin_email(user.get("email", "")):
-                denied_email = urllib.parse.quote((user or {}).get("email", "not signed in"))
-                self.redirect(f"/access-denied?email={denied_email}")
+                self.redirect("/access-denied")
                 return
             self.send_bytes(page_admin(user))
         elif path == "/auth/google":
@@ -1159,7 +1157,7 @@ class TrafficHandler(BaseHTTPRequestHandler):
         elif path == "/auth/google/callback":
             self.finish_google_auth(query)
         elif path == "/access-denied":
-            self.send_bytes(page_access_denied(query.get("email", [""])[0]))
+            self.send_bytes(page_access_denied())
         elif path == "/qr-direct":
             self.record_direct_qr(query, user)
         elif path == "/api/admin-state":
@@ -1342,8 +1340,7 @@ class TrafficHandler(BaseHTTPRequestHandler):
             google_user = json.loads(response.read().decode())
         user = {"email": google_user.get("email", ""), "name": google_user.get("name", ""), "picture": google_user.get("picture", ""), "role": role}
         if role == "admin" and not is_admin_email(user["email"]):
-            denied_email = urllib.parse.quote(user["email"])
-            self.redirect(f"/access-denied?email={denied_email}")
+            self.redirect("/access-denied")
             return
         self.redirect("/admin/dashboard" if role == "admin" else "/public", user=user)
 
