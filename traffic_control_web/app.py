@@ -388,6 +388,10 @@ def page_public(user: dict | None) -> bytes:
     .route-dot-start { background: #0f766e; }
     .route-dot-end { background: #dc2626; }
     .blocked-lane-marker { display: grid; height: 36px; width: 36px; place-items: center; border: 3px solid #fff; border-radius: 999px; background: #dc2626; color: #fff; box-shadow: 0 12px 26px rgb(127 29 29 / 0.35); font-weight: 900; }
+    .user-location-marker { position: relative; width: 30px; height: 30px; border-radius: 999px; border: 4px solid #fff; background: #2563eb; box-shadow: 0 0 0 4px rgb(37 99 235 / .22), 0 12px 28px rgb(15 23 42 / .35); }
+    .user-location-marker::after { content: ""; position: absolute; inset: -11px; border: 2px solid rgb(37 99 235 / .38); border-radius: 999px; animation: ping 1.6s cubic-bezier(0,0,.2,1) infinite; }
+    .hotspot-map-marker { display: grid; width: 28px; height: 28px; place-items: center; border: 3px solid #fff; border-radius: 999px; background: #f97316; color: #fff; box-shadow: 0 8px 20px rgb(15 23 42 / .28); font: 800 13px/1 Inter, sans-serif; }
+    .hotspot-map-marker-hot { background: #dc2626; }
   </style>"""
     body = f"""
 <aside class="fixed left-0 top-0 z-50 hidden h-full w-64 flex-col border-r border-slate-200 bg-white py-6 lg:flex">
@@ -473,9 +477,10 @@ let destinationMarker;
 let routeStartMarker;
 let blockedLaneMarker;
 let blockedLaneLine;
+let hotspotMarkers = [];
 let usingTopoLayer = false;
 let routeIndex = 0;
-const routeFocus = [
+let routeFocus = [
   {{ name: 'Worli Sea Link', center: {{ lat: 19.0270, lng: 72.8150 }}, zoom: 14 }},
   {{ name: 'Western Express Hwy', center: {{ lat: 19.1176, lng: 72.8562 }}, zoom: 13 }},
   {{ name: 'Bandra Kurla Complex', center: {{ lat: 19.0697, lng: 72.8697 }}, zoom: 14 }}
@@ -513,6 +518,10 @@ function clearRouteCongestionLines() {{
   routeCongestionLines.forEach(line => line.remove());
   routeCongestionLines = [];
 }}
+function clearHotspotMarkers() {{
+  hotspotMarkers.forEach(marker => marker.remove());
+  hotspotMarkers = [];
+}}
 function blockedLaneSegment(coords) {{
   return [[coords[0], coords[1] - 0.0012], [coords[0], coords[1] + 0.0012]];
 }}
@@ -529,6 +538,25 @@ function renderHotspots(summary) {{
   document.getElementById('avgSpeed').textContent = summary.avg_speed;
   document.getElementById('speedTrend').textContent = summary.trend;
   if (summary.area) document.getElementById('mapSource').textContent = `${{summary.source_label || 'Location-based local congestion model'}} · ${{summary.area}}`;
+  routeFocus = (summary.hotspots || []).map(spot => ({{
+    name: spot.name,
+    center: {{ lat: spot.lat, lng: spot.lng }},
+    zoom: 15
+  }})).filter(route => Number.isFinite(route.center.lat) && Number.isFinite(route.center.lng));
+  clearHotspotMarkers();
+  if (trafficMap) {{
+    routeFocus.forEach((route, index) => {{
+      const marker = L.marker([route.center.lat, route.center.lng], {{
+        icon: L.divIcon({{
+          className: '',
+          html: `<div class="hotspot-map-marker ${{index === 0 ? 'hotspot-map-marker-hot' : ''}}">${{index + 1}}</div>`,
+          iconSize: [28, 28],
+          iconAnchor: [14, 14]
+        }})
+      }}).addTo(trafficMap).bindPopup(route.name);
+      hotspotMarkers.push(marker);
+    }});
+  }}
   document.getElementById('hotspots').innerHTML = summary.hotspots.map((spot, index) => `
     <button class="hotspot-btn w-full rounded-r-lg border-l-4 ${{index === 0 ? 'border-red-500 bg-red-50' : 'border-orange-500 bg-orange-50'}} p-3 text-left" data-index="${{index}}">
       <b>${{spot.name}}</b>
@@ -537,6 +565,7 @@ function renderHotspots(summary) {{
   document.querySelectorAll('.hotspot-btn').forEach(btn => btn.onclick = () => focusRoute(Number(btn.dataset.index || 0)));
 }}
 function focusRoute(index) {{
+  if (!routeFocus.length) return;
   const route = routeFocus[index % routeFocus.length];
   routeIndex = index;
   if (trafficMap) trafficMap.setView([route.center.lat, route.center.lng], route.zoom);
@@ -569,10 +598,11 @@ async function centerOnCurrentLocation(fromAutoLoad = false) {{
       trafficMap.setView([center.lat, center.lng], 15);
       trafficMap.invalidateSize();
       if (!currentLocationMarker) {{
-        currentLocationMarker = L.circleMarker([center.lat, center.lng], {{ radius: 8, color: '#fff', weight: 3, fillColor: '#0f766e', fillOpacity: 1 }}).addTo(trafficMap).bindPopup('Your current location');
+        currentLocationMarker = L.marker([center.lat, center.lng], {{ icon: L.divIcon({{ className: '', html: '<div class="user-location-marker"></div>', iconSize: [30, 30], iconAnchor: [15, 15] }}) }}).addTo(trafficMap).bindPopup('Your current location');
       }} else {{
         currentLocationMarker.setLatLng([center.lat, center.lng]);
       }}
+      currentLocationMarker.openPopup();
     }}
     document.getElementById('mapSource').textContent = `OpenStreetMap centered on your location: ${{center.lat.toFixed(4)}}, ${{center.lng.toFixed(4)}}`;
     return center;
@@ -2434,6 +2464,30 @@ def distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return round(2 * radius * asin(sqrt(a)), 1)
 
 
+def offset_coordinates(lat: float, lng: float, north_km: float, east_km: float) -> tuple[float, float]:
+    from math import cos, radians
+
+    lat_delta = north_km / 111.0
+    lng_scale = max(0.25, cos(radians(lat)))
+    lng_delta = east_km / (111.0 * lng_scale)
+    return round(lat + lat_delta, 6), round(lng + lng_delta, 6)
+
+
+def generated_nearby_hotspots(lat: float, lng: float) -> list[dict]:
+    nearby_points = [
+        ("North approach signal", 1.2, 0.3, 14),
+        ("East link crossing", 0.2, 1.6, 12),
+        ("Market road junction", -1.1, -0.7, 10),
+        ("South feeder road", -1.8, 0.4, 9),
+        ("West bypass entry", 0.4, -1.9, 11),
+    ]
+    hotspots = []
+    for name, north_km, east_km, base_delay in nearby_points:
+        spot_lat, spot_lng = offset_coordinates(lat, lng, north_km, east_km)
+        hotspots.append({"name": name, "lat": spot_lat, "lng": spot_lng, "base_delay": base_delay})
+    return hotspots
+
+
 def traffic_summary(query: dict[str, list[str]] | None = None) -> dict:
     query = query or {}
     lat = None
@@ -2469,7 +2523,14 @@ def traffic_summary(query: dict[str, list[str]] | None = None) -> dict:
         for spot in hotspots:
             spot["distance_km"] = distance_km(lat, lng, spot["lat"], spot["lng"])
         selected = sorted(hotspots, key=lambda spot: spot["distance_km"])[:3]
-        area = f"near {selected[0]['name']}"
+        if not selected or selected[0]["distance_km"] > 25:
+            hotspots = generated_nearby_hotspots(lat, lng)
+            for spot in hotspots:
+                spot["distance_km"] = distance_km(lat, lng, spot["lat"], spot["lng"])
+            selected = sorted(hotspots, key=lambda spot: spot["distance_km"])[:3]
+            area = "near your current location"
+        else:
+            area = f"near {selected[0]['name']}"
     else:
         selected = hotspots[:3]
         area = "default Mumbai view"
@@ -2484,6 +2545,8 @@ def traffic_summary(query: dict[str, list[str]] | None = None) -> dict:
                 "name": spot["name"],
                 "delay": f"+{delay} mins",
                 "distance_km": spot.get("distance_km"),
+                "lat": spot["lat"],
+                "lng": spot["lng"],
             }
         )
 
