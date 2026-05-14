@@ -152,7 +152,7 @@ def db_execute_many(query: str, params: tuple = ()) -> int:
 
 
 def html_page(title: str, body: str, extra_head: str = "") -> bytes:
-    return f"""<!doctype html>
+    return rf"""<!doctype html>
 <html lang="en" class="light">
 <head>
   <meta charset="utf-8">
@@ -181,6 +181,47 @@ def html_page(title: str, body: str, extra_head: str = "") -> bytes:
     .signal-active {{ filter: drop-shadow(0 0 10px currentColor); }}
     .hide-scrollbar::-webkit-scrollbar {{ display: none; }}
     .hide-scrollbar {{ -ms-overflow-style: none; scrollbar-width: none; }}
+    *, ::before, ::after {{ box-sizing: border-box; border-width: 0; border-style: solid; border-color: var(--line); }}
+    body, h1, h2, h3, p {{ margin: 0; }}
+    a {{ color: inherit; text-decoration: inherit; }}
+    button, input, select, textarea {{ font: inherit; color: inherit; }}
+    button {{ cursor: pointer; }}
+    img, video, canvas, svg {{ display: block; max-width: 100%; }}
+    .fixed {{ position: fixed; }} .sticky {{ position: sticky; }} .absolute {{ position: absolute; }} .relative {{ position: relative; }}
+    .top-0 {{ top: 0; }} .top-4 {{ top: 1rem; }} .top-1\/2 {{ top: 50%; }} .bottom-0 {{ bottom: 0; }} .bottom-4 {{ bottom: 1rem; }}
+    .left-0 {{ left: 0; }} .left-4 {{ left: 1rem; }} .left-1\/2 {{ left: 50%; }} .right-0 {{ right: 0; }} .right-4 {{ right: 1rem; }} .inset-x-4 {{ left: 1rem; right: 1rem; }}
+    .z-40 {{ z-index: 40; }} .z-50 {{ z-index: 50; }} .z-\[450\] {{ z-index: 450; }}
+    .block {{ display: block; }} .inline-block {{ display: inline-block; }} .inline-flex {{ display: inline-flex; }} .flex {{ display: flex; }} .grid {{ display: grid; }} .hidden {{ display: none; }}
+    .flex-1 {{ flex: 1 1 0%; }} .flex-none {{ flex: none; }} .flex-col {{ flex-direction: column; }} .flex-wrap {{ flex-wrap: wrap; }}
+    .items-center {{ align-items: center; }} .items-start {{ align-items: flex-start; }} .justify-center {{ justify-content: center; }} .justify-between {{ justify-content: space-between; }} .justify-around {{ justify-content: space-around; }} .place-items-center {{ place-items: center; }}
+    .grid-cols-1 {{ grid-template-columns: repeat(1, minmax(0, 1fr)); }} .grid-cols-2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .grid-cols-3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} .grid-cols-12 {{ grid-template-columns: repeat(12, minmax(0, 1fr)); }} .col-span-12 {{ grid-column: span 12 / span 12; }}
+    .gap-1 {{ gap: .25rem; }} .gap-2 {{ gap: .5rem; }} .gap-3 {{ gap: .75rem; }} .gap-4 {{ gap: 1rem; }} .gap-6 {{ gap: 1.5rem; }} .gap-8 {{ gap: 2rem; }}
+    .space-y-1 > * + * {{ margin-top: .25rem; }} .space-y-2 > * + * {{ margin-top: .5rem; }} .space-y-3 > * + * {{ margin-top: .75rem; }} .space-y-4 > * + * {{ margin-top: 1rem; }} .space-y-5 > * + * {{ margin-top: 1.25rem; }} .space-y-6 > * + * {{ margin-top: 1.5rem; }} .space-y-8 > * + * {{ margin-top: 2rem; }}
+    .mx-auto {{ margin-left: auto; margin-right: auto; }} .mb-2 {{ margin-bottom: .5rem; }} .mb-3 {{ margin-bottom: .75rem; }} .mb-4 {{ margin-bottom: 1rem; }} .mb-5 {{ margin-bottom: 1.25rem; }} .mb-8 {{ margin-bottom: 2rem; }} .mt-1 {{ margin-top: .25rem; }} .mt-2 {{ margin-top: .5rem; }} .mt-4 {{ margin-top: 1rem; }} .mt-6 {{ margin-top: 1.5rem; }} .mr-3 {{ margin-right: .75rem; }}
+    .p-3 {{ padding: .75rem; }} .p-4 {{ padding: 1rem; }} .p-5 {{ padding: 1.25rem; }} .p-6 {{ padding: 1.5rem; }} .p-8 {{ padding: 2rem; }} .px-2 {{ padding-left: .5rem; padding-right: .5rem; }} .px-3 {{ padding-left: .75rem; padding-right: .75rem; }} .px-4 {{ padding-left: 1rem; padding-right: 1rem; }} .px-5 {{ padding-left: 1.25rem; padding-right: 1.25rem; }} .px-6 {{ padding-left: 1.5rem; padding-right: 1.5rem; }} .py-0\.5 {{ padding-top: .125rem; padding-bottom: .125rem; }} .py-1 {{ padding-top: .25rem; padding-bottom: .25rem; }} .py-2 {{ padding-top: .5rem; padding-bottom: .5rem; }} .py-3 {{ padding-top: .75rem; padding-bottom: .75rem; }} .py-4 {{ padding-top: 1rem; padding-bottom: 1rem; }} .py-6 {{ padding-top: 1.5rem; padding-bottom: 1.5rem; }} .py-10 {{ padding-top: 2.5rem; padding-bottom: 2.5rem; }} .pt-6 {{ padding-top: 1.5rem; }} .pt-20 {{ padding-top: 5rem; }} .pb-16 {{ padding-bottom: 4rem; }} .pb-24 {{ padding-bottom: 6rem; }}
+    .h-1 {{ height: .25rem; }} .h-2 {{ height: .5rem; }} .h-10 {{ height: 2.5rem; }} .h-16 {{ height: 4rem; }} .h-48 {{ height: 12rem; }} .h-72 {{ height: 18rem; }} .h-full {{ height: 100%; }} .h-\[353px\] {{ height: 353px; }} .h-\[500px\] {{ height: 500px; }}
+    .w-2 {{ width: .5rem; }} .w-10 {{ width: 2.5rem; }} .w-16 {{ width: 4rem; }} .w-64 {{ width: 16rem; }} .w-72 {{ width: 18rem; }} .w-full {{ width: 100%; }} .w-1\/3 {{ width: 33.333333%; }} .w-3\/4 {{ width: 75%; }} .min-w-52 {{ min-width: 13rem; }} .min-w-64 {{ min-width: 16rem; }}
+    .min-h-screen {{ min-height: 100vh; min-height: 100dvh; }} .max-w-md {{ max-width: 28rem; }} .max-w-2xl {{ max-width: 42rem; }} .max-w-4xl {{ max-width: 56rem; }} .max-w-6xl {{ max-width: 72rem; }}
+    .overflow-hidden {{ overflow: hidden; }} .overflow-x-auto {{ overflow-x: auto; }} .snap-x {{ scroll-snap-type: x mandatory; }} .snap-mandatory {{ --tw-scroll-snap-strictness: mandatory; }} .snap-start {{ scroll-snap-align: start; }}
+    .rounded {{ border-radius: .25rem; }} .rounded-lg {{ border-radius: .5rem; }} .rounded-full {{ border-radius: 9999px; }} .rounded-r-lg {{ border-top-right-radius: .5rem; border-bottom-right-radius: .5rem; }}
+    .border {{ border-width: 1px; }} .border-2 {{ border-width: 2px; }} .border-4 {{ border-width: 4px; }} .border-b {{ border-bottom-width: 1px; }} .border-t {{ border-top-width: 1px; }} .border-r {{ border-right-width: 1px; }} .border-r-4 {{ border-right-width: 4px; }} .border-l-4 {{ border-left-width: 4px; }} .border-y {{ border-top-width: 1px; border-bottom-width: 1px; }} .border-dashed {{ border-style: dashed; }}
+    .border-slate-100 {{ border-color: #f1f5f9; }} .border-slate-200 {{ border-color: #e2e8f0; }} .border-slate-300 {{ border-color: #cbd5e1; }} .border-slate-900 {{ border-color: #0f172a; }} .border-slate-950 {{ border-color: #020617; }} .border-orange-100 {{ border-color: #ffedd5; }} .border-red-700 {{ border-color: #b91c1c; }}
+    .bg-white {{ background-color: #fff; }} .bg-white\/90 {{ background-color: rgb(255 255 255 / .9); }} .bg-white\/95 {{ background-color: rgb(255 255 255 / .95); }} .bg-slate-50 {{ background-color: #f8fafc; }} .bg-slate-50\/90 {{ background-color: rgb(248 250 252 / .9); }} .bg-slate-100 {{ background-color: #f1f5f9; }} .bg-slate-200 {{ background-color: #e2e8f0; }} .bg-slate-950 {{ background-color: #020617; }} .bg-red-50 {{ background-color: #fef2f2; }} .bg-red-100 {{ background-color: #fee2e2; }} .bg-orange-50 {{ background-color: #fff7ed; }} .bg-orange-100 {{ background-color: #ffedd5; }} .bg-green-500 {{ background-color: #22c55e; }} .bg-\[\#dce9ff\] {{ background-color: #dce9ff; }} .bg-\[\#e5eeff\] {{ background-color: #e5eeff; }} .bg-\[\#f8f9ff\] {{ background-color: #f8f9ff; }} .bg-\[\#fd761a\] {{ background-color: #fd761a; }} .bg-\[\#ffdbca\] {{ background-color: #ffdbca; }}
+    .text-left {{ text-align: left; }} .text-center {{ text-align: center; }} .font-sans {{ font-family: Inter, system-ui, sans-serif; }} .font-mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }} .text-xs {{ font-size: .75rem; line-height: 1rem; }} .text-sm {{ font-size: .875rem; line-height: 1.25rem; }} .text-lg {{ font-size: 1.125rem; line-height: 1.75rem; }} .text-xl {{ font-size: 1.25rem; line-height: 1.75rem; }} .text-2xl {{ font-size: 1.5rem; line-height: 2rem; }} .text-3xl {{ font-size: 1.875rem; line-height: 2.25rem; }} .text-4xl {{ font-size: 2.25rem; line-height: 2.5rem; }} .text-5xl {{ font-size: 3rem; line-height: 1; }} .text-6xl {{ font-size: 3.75rem; line-height: 1; }}
+    .font-medium {{ font-weight: 500; }} .font-semibold {{ font-weight: 600; }} .font-bold {{ font-weight: 700; }} .font-black {{ font-weight: 900; }} .uppercase {{ text-transform: uppercase; }} .tracking-tight {{ letter-spacing: 0; }} .tracking-wider {{ letter-spacing: .05em; }} .tracking-widest {{ letter-spacing: .1em; }} .underline {{ text-decoration-line: underline; }}
+    .text-white {{ color: #fff; }} .text-slate-400 {{ color: #94a3b8; }} .text-slate-500 {{ color: #64748b; }} .text-slate-600 {{ color: #475569; }} .text-slate-900 {{ color: #0f172a; }} .text-slate-950 {{ color: #020617; }} .text-red-500 {{ color: #ef4444; }} .text-red-600 {{ color: #dc2626; }} .text-red-700 {{ color: #b91c1c; }} .text-green-600 {{ color: #16a34a; }} .text-orange-700 {{ color: #c2410c; }} .text-\[\#0b1c30\] {{ color: #0b1c30; }} .text-\[\#5c2400\] {{ color: #5c2400; }} .text-\[\#7c839b\] {{ color: #7c839b; }} .text-\[\#fd761a\] {{ color: #fd761a; }}
+    .shadow-sm {{ box-shadow: 0 1px 2px 0 rgb(15 23 42 / .08); }} .shadow-lg {{ box-shadow: 0 10px 15px -3px rgb(15 23 42 / .1), 0 4px 6px -4px rgb(15 23 42 / .1); }} .shadow-orange-500\/20 {{ box-shadow: 0 10px 25px rgb(249 115 22 / .2); }}
+    .opacity-75 {{ opacity: .75; }} .object-cover {{ object-fit: cover; }} .pointer-events-none {{ pointer-events: none; }} .backdrop-blur {{ backdrop-filter: blur(8px); }} .transition {{ transition: all .15s ease; }} .animate-ping {{ animation: ping 1s cubic-bezier(0,0,.2,1) infinite; }}
+    .-translate-x-1\/2 {{ transform: translateX(-50%); }} .-translate-y-1\/2 {{ transform: translateY(-50%); }}
+    .hover\:bg-slate-50:hover {{ background-color: #f8fafc; }} .hover\:bg-slate-800:hover {{ background-color: #1e293b; }} .hover\:text-slate-900:hover {{ color: #0f172a; }} .hover\:shadow-md:hover {{ box-shadow: 0 4px 6px -1px rgb(15 23 42 / .12), 0 2px 4px -2px rgb(15 23 42 / .12); }}
+    @keyframes ping {{ 75%, 100% {{ transform: scale(2); opacity: 0; }} }}
+    @media (min-width: 768px) {{
+      .md\:block {{ display: block; }} .md\:flex {{ display: flex; }} .md\:hidden {{ display: none; }} .md\:flex-row {{ flex-direction: row; }} .md\:items-center {{ align-items: center; }} .md\:grid-cols-2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .md\:grid-cols-4 {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }} .md\:pl-16 {{ padding-left: 4rem; }}
+    }}
+    @media (min-width: 1024px) {{
+      .lg\:flex {{ display: flex; }} .lg\:hidden {{ display: none; }} .lg\:pl-64 {{ padding-left: 16rem; }} .lg\:grid-cols-3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} .lg\:grid-cols-4 {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }} .lg\:col-span-4 {{ grid-column: span 4 / span 4; }} .lg\:col-span-8 {{ grid-column: span 8 / span 8; }}
+    }}
+    @media (min-width: 1280px) {{ .xl\:grid-cols-3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} }}
   </style>
   {extra_head}
 </head>
