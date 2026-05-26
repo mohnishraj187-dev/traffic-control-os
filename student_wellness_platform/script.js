@@ -10,6 +10,7 @@ let currentStudentId = "";
 
 const fields = {
   name: document.querySelector("#studentName"),
+  location: document.querySelector("#studentLocation"),
   stressQuestions: [...document.querySelectorAll(".stress-question")],
   sleep: document.querySelector("#sleep"),
   study: document.querySelector("#study"),
@@ -34,7 +35,54 @@ const outputs = {
   suggestionList: document.querySelector("#suggestionList"),
   planList: document.querySelector("#planList"),
   alertBox: document.querySelector("#alertBox"),
+  counselorPanel: document.querySelector("#counselorPanel"),
+  counselorTitle: document.querySelector("#counselorTitle"),
+  counselorSummary: document.querySelector("#counselorSummary"),
+  counselorList: document.querySelector("#counselorList"),
 };
+
+const counselorDirectory = [
+  {
+    name: "Campus Wellness Cell",
+    area: "On campus / student affairs",
+    cities: ["campus", "college", "university", "hostel"],
+    mode: "In-person or mentor referral",
+    focus: "Academic stress, attendance concerns, adjustment issues",
+    contact: "Contact through your department mentor or student affairs office",
+  },
+  {
+    name: "Mind Care Student Support",
+    area: "Chennai",
+    cities: ["chennai", "vellore", "pondicherry", "coimbatore"],
+    mode: "Online and in-person",
+    focus: "Burnout, exam anxiety, sleep routine planning",
+    contact: "mindcare-support@example.com",
+  },
+  {
+    name: "Balance Path Counselling",
+    area: "Bengaluru",
+    cities: ["bengaluru", "bangalore", "mysuru", "mysore"],
+    mode: "Online sessions",
+    focus: "Study overload, emotional regulation, productivity recovery",
+    contact: "balancepath@example.com",
+  },
+  {
+    name: "Saarthi Youth Counselling",
+    area: "Mumbai",
+    cities: ["mumbai", "thane", "pune", "navi mumbai"],
+    mode: "Online and clinic visit",
+    focus: "Stress overload, family pressure, academic stability",
+    contact: "saarthi-youth@example.com",
+  },
+  {
+    name: "CalmStep Tele-Counselling",
+    area: "India-wide online",
+    cities: ["online", "india", "remote"],
+    mode: "Online",
+    focus: "First support call, triage, wellness planning",
+    contact: "calmstep@example.com",
+  },
+];
 
 function storageKey(studentId) {
   return `${STORAGE_PREFIX}${studentId}`;
@@ -43,6 +91,7 @@ function storageKey(studentId) {
 function getFormData() {
   return {
     name: fields.name.value.trim(),
+    location: fields.location.value.trim(),
     stressAnswers: fields.stressQuestions.map((field) => field.value),
     sleep: fields.sleep.value,
     study: fields.study.value,
@@ -63,6 +112,7 @@ function saveCurrentStudent() {
 
 function resetForm() {
   fields.name.value = "";
+  fields.location.value = "";
   fields.stressQuestions.forEach((field) => {
     field.value = "0";
   });
@@ -78,6 +128,7 @@ function hasCheckInInput() {
   return Boolean(
     fields.name.value.trim()
       || fields.notes.value.trim()
+      || fields.location.value.trim()
       || fields.totalClasses.value
       || fields.attendedClasses.value
       || stressRaw > 0
@@ -93,11 +144,12 @@ function loadStudent(studentId) {
   if (saved) {
     const data = JSON.parse(saved);
     fields.name.value = data.name || "";
+    fields.location.value = data.location || "";
     fields.stressQuestions.forEach((field, index) => {
       field.value = data.stressAnswers?.[index] || "0";
     });
-    fields.sleep.value = data.sleep || "5";
-    fields.study.value = data.study || "9";
+    fields.sleep.value = data.sleep || "7";
+    fields.study.value = data.study || "4";
     fields.totalClasses.value = data.totalClasses || "";
     fields.attendedClasses.value = data.attendedClasses || "";
     fields.notes.value = data.notes || "";
@@ -166,6 +218,70 @@ function listItems(target, items) {
   });
 }
 
+function clearCounselorRecommendations() {
+  outputs.counselorPanel.classList.remove("hidden");
+  outputs.counselorTitle.textContent = "Counselor recommendations";
+  outputs.counselorSummary.textContent =
+    "Complete the check-in to see whether counselor support is recommended.";
+  outputs.counselorList.innerHTML = "";
+}
+
+function findCounselors(location) {
+  const normalizedLocation = location.trim().toLowerCase();
+  const matches = counselorDirectory.filter((counselor) =>
+    counselor.cities.some((city) => normalizedLocation.includes(city))
+  );
+
+  const campusOption = counselorDirectory[0];
+  const onlineOption = counselorDirectory[counselorDirectory.length - 1];
+  const recommended = matches.length ? matches : [campusOption, onlineOption];
+
+  return [...new Map(recommended.map((counselor) => [counselor.name, counselor])).values()].slice(0, 3);
+}
+
+function renderCounselorRecommendations(stability, stress, attendance, emotionalRisk) {
+  const needsImmediateSupport = stability < 45 || emotionalRisk;
+  const couldUseSupport = stability < 75 || stress >= 6 || attendance.status === "slipping";
+
+  if (!needsImmediateSupport && !couldUseSupport) {
+    outputs.counselorPanel.classList.remove("hidden");
+    outputs.counselorTitle.textContent = "Counselor recommendations";
+    outputs.counselorSummary.textContent =
+      "Counselor support is not urgently indicated right now. Keep campus support details available if the student wants to talk.";
+    outputs.counselorList.innerHTML = "";
+    return;
+  }
+
+  const counselors = findCounselors(fields.location.value);
+  outputs.counselorPanel.classList.remove("hidden");
+  outputs.counselorTitle.textContent = needsImmediateSupport
+    ? "Recommended counselor support"
+    : "Optional support matches";
+  outputs.counselorSummary.textContent = fields.location.value.trim()
+    ? `Demo recommendations based on risk score and location near ${fields.location.value.trim()}. Verify availability before contacting.`
+    : "Add city or nearby area to improve local matching. For now, these are general support options.";
+
+  outputs.counselorList.innerHTML = "";
+  counselors.forEach((counselor) => {
+    const card = document.createElement("article");
+    card.className = "counselor-card";
+    const contactLink = counselor.contact.includes("@")
+      ? `mailto:${counselor.contact}`
+      : `https://www.google.com/search?q=${encodeURIComponent(counselor.contact)}`;
+
+    card.innerHTML = `
+      <strong>${counselor.name}</strong>
+      <span>${counselor.area} | ${counselor.mode}</span>
+      <p>${counselor.focus}</p>
+      <div class="counselor-actions">
+        <a href="${contactLink}" target="_blank" rel="noreferrer">${counselor.contact.includes("@") ? "Email" : "Referral info"}</a>
+        <a href="https://www.google.com/search?q=${encodeURIComponent(`${counselor.area} student counselor near me`)}" target="_blank" rel="noreferrer">Search nearby</a>
+      </div>
+    `;
+    outputs.counselorList.appendChild(card);
+  });
+}
+
 function setInitialState() {
   outputs.stressValue.textContent = "Estimated stress: --/10";
   outputs.sleepValue.textContent = `${fields.sleep.value} hrs`;
@@ -184,6 +300,7 @@ function setInitialState() {
   listItems(outputs.planList, ["Recovery plan will appear after analysis."]);
   outputs.alertBox.classList.remove("urgent");
   outputs.alertBox.textContent = "Complete the check-in to generate counselor alert guidance.";
+  clearCounselorRecommendations();
 }
 
 function analyze() {
@@ -243,7 +360,10 @@ function analyze() {
     suggestions.push("Schedule a low-pressure check-in and identify the classes most at risk.");
   }
 
-  if (notes.includes("drained") || notes.includes("hopeless") || notes.includes("panic") || notes.includes("alone")) {
+  const emotionalRisk =
+    notes.includes("drained") || notes.includes("hopeless") || notes.includes("panic") || notes.includes("alone");
+
+  if (emotionalRisk) {
     risk += 18;
     risks.push("Emotional risk indicator detected in mood notes.");
     suggestions.push("Offer a supportive check-in and provide access to campus wellness resources.");
@@ -295,6 +415,8 @@ function analyze() {
       ? "Counselor alert: immediate support check-in recommended."
       : "Counselor alert: monitor for 48 hours before escalation.";
 
+  renderCounselorRecommendations(stability, stress, attendance, emotionalRisk);
+
   saveCurrentStudent();
 }
 
@@ -325,6 +447,7 @@ form.addEventListener("submit", (event) => {
 
 const inputFields = [
   fields.name,
+  fields.location,
   ...fields.stressQuestions,
   fields.sleep,
   fields.study,

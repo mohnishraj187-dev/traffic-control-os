@@ -60,6 +60,11 @@
             <input id="studentName" type="text" placeholder="Enter student name" autocomplete="name">
           </label>
 
+          <label>
+            City or nearby area
+            <input id="studentLocation" type="text" placeholder="Example: Chennai, Vellore, Mumbai">
+          </label>
+
           <fieldset>
             <legend>Stress questions</legend>
             <label>
@@ -186,6 +191,17 @@
           <div class="alert-box" id="alertBox">
             Complete the check-in to generate counselor alert guidance.
           </div>
+
+          <section class="counselor-panel" id="counselorPanel">
+            <div>
+              <p class="eyebrow">Support Match</p>
+              <h3 id="counselorTitle">Counselor recommendations</h3>
+              <p id="counselorSummary">
+                Complete the check-in to see whether counselor support is recommended.
+              </p>
+            </div>
+            <div class="counselor-list" id="counselorList"></div>
+          </section>
         </section>
       </section>
     </main>
