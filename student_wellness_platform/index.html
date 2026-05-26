@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Student Wellness Stability Platform</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <section class="login-screen" id="loginScreen">
+      <form class="login-card" id="loginForm">
+        <p class="eyebrow">Student Access</p>
+        <h1>Welcome Back</h1>
+        <p class="login-copy">
+          Enter a student ID to continue the wellness check-in. Each ID keeps its
+          own saved profile and latest analysis on this browser.
+        </p>
+        <label>
+          Student ID
+          <input id="loginStudentId" type="text" placeholder="Example: STU1024" autocomplete="username" required>
+        </label>
+        <button type="submit">Continue</button>
+      </form>
+    </section>
+
+    <main class="app-shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">AI-Powered Student Wellness</p>
+          <h1>Academic Stability Platform</h1>
+          <p class="hero-copy">
+            Detect burnout, stress overload, unhealthy study patterns, sleep imbalance,
+            attendance decline, and emotional risk before they become academic setbacks.
+          </p>
+        </div>
+        <div class="stability-card">
+          <span class="score-label">Stability Score</span>
+          <strong id="stabilityScore">--</strong>
+          <span id="riskBand" class="risk-band">Awaiting Check-In</span>
+        </div>
+      </section>
+
+      <section class="session-bar">
+        <div>
+          <span>Active student ID</span>
+          <strong id="activeStudentId">--</strong>
+        </div>
+        <button class="ghost-button" id="logoutButton" type="button">Switch Student</button>
+      </section>
+
+      <section class="workspace">
+        <form class="panel assessment" id="assessmentForm">
+          <div class="section-heading">
+            <p class="eyebrow">Daily Check-In</p>
+            <h2>Student Signals</h2>
+          </div>
+
+          <label>
+            Student name
+            <input id="studentName" type="text" placeholder="Enter student name" autocomplete="name">
+          </label>
+
+          <fieldset>
+            <legend>Stress questions</legend>
+            <label>
+              Workload feels unmanageable
+              <select class="stress-question" id="workloadStress">
+                <option value="0" selected>No</option>
+                <option value="1">Slightly</option>
+                <option value="2">Often</option>
+                <option value="3">Almost always</option>
+              </select>
+            </label>
+            <label>
+              Difficulty focusing while studying
+              <select class="stress-question" id="focusStress">
+                <option value="0" selected>No</option>
+                <option value="1">Slightly</option>
+                <option value="2">Often</option>
+                <option value="3">Almost always</option>
+              </select>
+            </label>
+            <label>
+              Physical signs like headache, tiredness, or restlessness
+              <select class="stress-question" id="bodyStress">
+                <option value="0" selected>No</option>
+                <option value="1">Slightly</option>
+                <option value="2">Often</option>
+                <option value="3">Almost always</option>
+              </select>
+            </label>
+            <label>
+              Worried about deadlines, exams, or backlog
+              <select class="stress-question" id="deadlineStress">
+                <option value="0" selected>No</option>
+                <option value="1">Slightly</option>
+                <option value="2">Often</option>
+                <option value="3">Almost always</option>
+              </select>
+            </label>
+            <label>
+              Irritable, anxious, or emotionally drained
+              <select class="stress-question" id="emotionStress">
+                <option value="0" selected>No</option>
+                <option value="1">Slightly</option>
+                <option value="2">Often</option>
+                <option value="3">Almost always</option>
+              </select>
+            </label>
+            <span class="range-value" id="stressValue">Estimated stress: --/10</span>
+          </fieldset>
+
+          <label>
+            Sleep last night
+            <input id="sleep" type="range" min="2" max="10" value="7">
+            <span class="range-value" id="sleepValue">7 hrs</span>
+          </label>
+
+          <label>
+            Study load today
+            <input id="study" type="range" min="1" max="12" value="4">
+            <span class="range-value" id="studyValue">4 hrs</span>
+          </label>
+
+          <div class="split-inputs">
+            <label>
+              Total classes this week
+              <input id="totalClasses" type="number" min="0" placeholder="Example: 24">
+            </label>
+            <label>
+              Classes attended
+              <input id="attendedClasses" type="number" min="0" placeholder="Example: 19">
+            </label>
+          </div>
+          <span class="range-value" id="attendanceRate">Attendance: --</span>
+
+          <label>
+            Mood notes
+            <textarea id="notes" rows="4" placeholder="Add observations or student self-report notes"></textarea>
+          </label>
+
+          <button type="submit">Analyze Student Wellness</button>
+        </form>
+
+        <section class="panel results" aria-live="polite">
+          <div class="section-heading">
+            <p class="eyebrow">AI Analysis</p>
+            <h2 id="studentTitle">No student selected</h2>
+          </div>
+
+          <div class="status-grid">
+            <article>
+              <span>Burnout</span>
+              <strong id="burnoutStatus">--</strong>
+            </article>
+            <article>
+              <span>Stress</span>
+              <strong id="stressStatus">--</strong>
+            </article>
+            <article>
+              <span>Sleep</span>
+              <strong id="sleepStatus">--</strong>
+            </article>
+            <article>
+              <span>Attendance</span>
+              <strong id="attendanceStatus">--</strong>
+            </article>
+          </div>
+
+          <div class="insight-row">
+            <div>
+              <h3>Detected Risk Indicators</h3>
+              <ul id="riskList"></ul>
+            </div>
+            <div>
+              <h3>Intervention Suggestions</h3>
+              <ul id="suggestionList"></ul>
+            </div>
+          </div>
+
+          <div class="recovery-plan">
+            <h3>Productivity Recovery Plan</h3>
+            <ol id="planList"></ol>
+          </div>
+
+          <div class="alert-box" id="alertBox">
+            Complete the check-in to generate counselor alert guidance.
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>

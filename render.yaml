@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: student-wellness-platform
+    runtime: static
+    staticPublishPath: ./student_wellness_platform
+    buildCommand: ""
+    autoDeploy: true
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-store
